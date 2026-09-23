@@ -1,0 +1,12 @@
+[package]
+name = "gibberish-storage"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+gibberish-protocol = { path = "../gibberish-protocol" }
+crc32fast = { workspace = true }
+
+[dev-dependencies]

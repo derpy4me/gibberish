@@ -1,0 +1,21 @@
+# Rust build artifacts
+target/
+**/target/
+
+# IDE and OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Log files and temporary runtime data
+*.log
+/tmp/
+scratchpad/
+nonce_state.json
+
+# Environment overrides
+.env
+.env.local

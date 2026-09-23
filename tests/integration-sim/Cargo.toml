@@ -1,0 +1,13 @@
+[package]
+name = "integration-sim"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+gibberish-protocol = { path = "../../crates/gibberish-protocol" }
+gibberish-crypto = { path = "../../crates/gibberish-crypto" }
+gibberish-storage = { path = "../../crates/gibberish-storage" }
+
+[dev-dependencies]

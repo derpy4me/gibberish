@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/gibberish-protocol",
+    "crates/gibberish-crypto",
+    "crates/gibberish-storage",
+    "apps/gibberish-daemon",
+    "tests/integration-sim",
+]
+exclude = [
+    "apps/gibberish-firmware",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Gibberish Mesh Team"]
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+postcard = { version = "1.0.8", default-features = false }
+serde = { version = "1.0.210", default-features = false, features = ["derive"] }
+zeroize = { version = "1.8.1", default-features = false, features = ["derive", "alloc"] }
+chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["alloc"] }
+x25519-dalek = { version = "2.0.1", default-features = false, features = ["static_secrets"] }
+blake3 = { version = "1.5.4", default-features = false }
+subtle = { version = "2.6.1", default-features = false }
+crc32fast = { version = "1.4.2", default-features = false }
+log = "0.4.22"
+thiserror = { version = "1.0.64", default-features = false }
+tokio = { version = "1.40.0", features = ["full"] }
+tokio-tungstenite = "0.24.0"
+futures-util = "0.3.30"
+serialport = "4.5.1"
+arboard = { version = "3.4.1", features = ["wayland-data-control"] }

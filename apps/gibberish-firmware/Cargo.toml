@@ -1,0 +1,32 @@
+[workspace]
+
+[package]
+name = "gibberish-firmware"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+esp-hal = { version = "1.2.1", features = ["esp32c5", "unstable"] }
+esp-backtrace = { version = "0.20.0", features = ["esp32c5", "panic-handler", "println"] }
+esp-println = { version = "0.18.0", default-features = false, features = ["esp32c5", "jtag-serial"] }
+esp-bootloader-esp-idf = { version = "0.6.0", features = ["esp32c5"] }
+esp-radio = { version = "1.0.0-beta.1", features = ["esp32c5", "ieee802154", "unstable"] }
+esp-alloc = { version = "0.11.0" }
+postcard = { version = "1.0.8", default-features = false }
+serde = { version = "1.0.210", default-features = false, features = ["derive"] }
+
+# Zero-Trust blind dongle: firmware imports ONLY protocol and storage.
+# NEVER import gibberish-crypto or crypto key material!
+gibberish-protocol = { path = "../../crates/gibberish-protocol" }
+gibberish-storage = { path = "../../crates/gibberish-storage" }
+
+[features]
+default = ["debug-telemetry"]
+debug-telemetry = []
+prod = []
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
