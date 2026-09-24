@@ -19,3 +19,5 @@ nonce_state.json
 # Environment overrides
 .env
 .env.local
+.envrc
+/.gh/

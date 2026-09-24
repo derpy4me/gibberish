@@ -56,3 +56,6 @@ A disk-backed counter durability pattern where host companion daemons write ahea
 ### Provenance Hash Echo Suppression
 A loopback suppression mechanism for synchronized clipboard daemons that records `blake3(text)` and a 500ms time window whenever writing remote text to the local OS clipboard. Incoming clipboard events within the window matching the recorded hash are dropped as local echoes, while user-initiated copies or differing content immediately transmit.
 
+### MAC-Layer Promiscuous Loopback Suppression
+A packet filtering discipline in raw IEEE 802.15.4 promiscuous mesh transceivers where the low-level radio polling loop compares the MAC Header (MHR) Source Short Address against the local device's hardware MAC address (`raw.data[8..12] == local_mac[4..8]`) and immediately discards self-transmitted airwave reflections before cryptographic decryption, payload processing, or host serial forwarding.
+

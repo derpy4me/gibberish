@@ -157,3 +157,83 @@ fn test_telemetry_tier_and_status_from_u8() {
     assert_eq!(DiagnosticEventCode::from_u8(4), DiagnosticEventCode::RadioTxOk);
     assert_eq!(DiagnosticEventCode::from_u8(255), DiagnosticEventCode::None);
 }
+
+#[test]
+fn test_peer_table_lifecycle_and_eviction() {
+    use gibberish_protocol::{PeerMetric, PeerTable};
+
+    let mut table = PeerTable::new();
+    assert_eq!(table.primary_peer(), None);
+    assert_eq!(table.secondary_peer(), None);
+
+    // Record first peer
+    table.record_peer(0xAAAA1111, -45, 230);
+    assert_eq!(table.primary_peer(), Some(PeerMetric {
+        node_id: 0xAAAA1111,
+        last_rssi: -45,
+        last_lqi: 230,
+        packet_count: 1,
+    }));
+    assert_eq!(table.secondary_peer(), None);
+
+    // Record second peer
+    table.record_peer(0xBBBB2222, -60, 180);
+    assert_eq!(table.primary_peer(), Some(PeerMetric {
+        node_id: 0xBBBB2222,
+        last_rssi: -60,
+        last_lqi: 180,
+        packet_count: 1,
+    }));
+    assert_eq!(table.secondary_peer(), Some(PeerMetric {
+        node_id: 0xAAAA1111,
+        last_rssi: -45,
+        last_lqi: 230,
+        packet_count: 1,
+    }));
+
+    // Update first peer (0xAAAA1111): should be promoted to MRU
+    table.record_peer(0xAAAA1111, -42, 240);
+    assert_eq!(table.primary_peer(), Some(PeerMetric {
+        node_id: 0xAAAA1111,
+        last_rssi: -42,
+        last_lqi: 240,
+        packet_count: 2,
+    }));
+    assert_eq!(table.secondary_peer(), Some(PeerMetric {
+        node_id: 0xBBBB2222,
+        last_rssi: -60,
+        last_lqi: 180,
+        packet_count: 1,
+    }));
+
+    // Add 2 more peers (total 4 = capacity)
+    table.record_peer(0xCCCC3333, -70, 140);
+    table.record_peer(0xDDDD4444, -75, 120);
+    // Table order (LRU to MRU): [BBBB2222, AAAA1111, CCCC3333, DDDD4444]
+    assert_eq!(table.primary_peer().unwrap().node_id, 0xDDDD4444);
+
+    // Re-touch BBBB2222 (the LRU entry in slot 0): should promote it to slot 3 (MRU)!
+    table.record_peer(0xBBBB2222, -58, 190);
+    assert_eq!(table.primary_peer().unwrap().node_id, 0xBBBB2222);
+    // Now slot 0 is AAAA1111
+
+    // Add a 5th peer (0xEEEE5555): slot 0 (AAAA1111) should be evicted, NOT BBBB2222!
+    table.record_peer(0xEEEE5555, -80, 100);
+    let active_peers: Vec<_> = table.peers.iter().flatten().map(|p| p.node_id).collect();
+    assert_eq!(active_peers, vec![0xCCCC3333, 0xDDDD4444, 0xBBBB2222, 0xEEEE5555]);
+    assert_eq!(table.primary_peer().unwrap().node_id, 0xEEEE5555);
+
+    assert_eq!(table.is_empty(), false);
+    assert_eq!(table.len(), 4);
+    assert_eq!(table.get_peer(0xAAAA1111), None); // Evicted
+    assert_eq!(table.get_peer(0xEEEE5555).unwrap().node_id, 0xEEEE5555);
+    assert_eq!(table.get_peer(0xBBBB2222).unwrap().packet_count, 2);
+
+    // Node ID 0 must be ignored and not inserted
+    table.record_peer(0, -50, 100);
+    assert_eq!(table.len(), 4);
+    assert_eq!(table.get_peer(0), None);
+}
+
+
+

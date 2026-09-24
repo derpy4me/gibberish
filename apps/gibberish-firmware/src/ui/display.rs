@@ -6,12 +6,15 @@ use esp_hal::delay::Delay;
 use esp_hal::gpio::Output;
 use esp_hal::spi::master::Spi;
 use esp_hal::Blocking;
-use gibberish_protocol::StorageModeStatus;
+use gibberish_protocol::{PeerMetric, StorageModeStatus};
 
 pub const LCD_WIDTH: u16 = 160;
 pub const LCD_HEIGHT: u16 = 80;
 pub const COL_OFFSET: u16 = 1;
 pub const ROW_OFFSET: u16 = 26;
+
+pub const NUM_LINES: usize = 7;
+pub const LINE_CHARS: usize = 26;
 
 pub struct St7735<'a, 'd> {
     spi: &'a RefCell<Spi<'d, Blocking>>,
@@ -19,6 +22,11 @@ pub struct St7735<'a, 'd> {
     dc: Output<'d>,
     rst: Output<'d>,
     backlight: Output<'d>,
+    cached_text: [[u8; LINE_CHARS]; NUM_LINES],
+    cached_fg: [u16; NUM_LINES],
+    cached_bg: [u16; NUM_LINES],
+    cached_valid: [bool; NUM_LINES],
+    last_sync_phase: u8,
 }
 
 impl<'a, 'd> St7735<'a, 'd> {
@@ -35,6 +43,11 @@ impl<'a, 'd> St7735<'a, 'd> {
             dc,
             rst,
             backlight,
+            cached_text: [[b' '; LINE_CHARS]; NUM_LINES],
+            cached_fg: [0; NUM_LINES],
+            cached_bg: [0; NUM_LINES],
+            cached_valid: [false; NUM_LINES],
+            last_sync_phase: 0xFF,
         }
     }
 
@@ -117,6 +130,11 @@ impl<'a, 'd> St7735<'a, 'd> {
         delay.delay_millis(100);
 
         self.fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, 0x0000);
+        self.cached_text = [[b' '; LINE_CHARS]; NUM_LINES];
+        self.cached_fg = [0; NUM_LINES];
+        self.cached_bg = [0; NUM_LINES];
+        self.cached_valid = [false; NUM_LINES];
+        self.last_sync_phase = 0xFF;
         self.backlight.set_low(); // Backlight ON
     }
 
@@ -231,6 +249,153 @@ impl<'a, 'd> St7735<'a, 'd> {
         }
     }
 
+    /// Draws a text line using dirty-region character diffing.
+    /// Only character cells whose glyph or color changed since the last frame
+    /// generate SPI write commands, avoiding full-screen rewrites and eliminating SPI bus contention.
+    pub fn draw_dirty_line(&mut self, line_idx: usize, text: &str, fg: u16, bg: u16) {
+        if line_idx >= NUM_LINES {
+            return;
+        }
+
+        let max_cols = if line_idx == 0 { 19 } else { LINE_CHARS };
+
+        let mut new_chars = [b' '; LINE_CHARS];
+        let bytes = text.as_bytes();
+        let to_copy = bytes.len().min(max_cols);
+        new_chars[..to_copy].copy_from_slice(&bytes[..to_copy]);
+
+        // If the line is already valid and identically rendered, skip immediately
+        if self.cached_valid[line_idx]
+            && self.cached_fg[line_idx] == fg
+            && self.cached_bg[line_idx] == bg
+            && self.cached_text[line_idx][..max_cols] == new_chars[..max_cols]
+        {
+            return;
+        }
+
+        let y = 2 + (line_idx as u16) * 11;
+
+        for col in 0..max_cols {
+            let c = new_chars[col];
+            let dirty = !self.cached_valid[line_idx]
+                || self.cached_text[line_idx][col] != c
+                || self.cached_fg[line_idx] != fg
+                || self.cached_bg[line_idx] != bg;
+
+            if dirty {
+                let x = 2 + (col as u16) * 6;
+                self.draw_char(x, y, c as char, fg, bg);
+                self.cached_text[line_idx][col] = c;
+            }
+        }
+
+        self.cached_fg[line_idx] = fg;
+        self.cached_bg[line_idx] = bg;
+        self.cached_valid[line_idx] = true;
+    }
+
+    /// Renders the encrypted sync animation indicator badge (top-right corner).
+    /// Displays a pulsating block when clipboard sync frames (FLAG_CLIPBOARD) are
+    /// active, and a dim idle badge when quiescent.
+    pub fn render_sync_indicator(&mut self, sync_phase: u8) {
+        if sync_phase == self.last_sync_phase {
+            return;
+        }
+
+        const BADGE_X: u16 = 118;
+        const BADGE_Y: u16 = 2;
+        const BADGE_W: u16 = 40;
+        const BADGE_H: u16 = 8;
+
+        if sync_phase == 0 {
+            // Quiescent idle state: black background with dim gray "[SYNC]" badge
+            self.fill_rect(BADGE_X, BADGE_Y, BADGE_W, BADGE_H, 0x0000);
+            self.draw_text(BADGE_X + 2, BADGE_Y, "[SYNC]", 0x4208, 0x0000);
+        } else {
+            // Active clipboard sync event: pulsating high-contrast inverted block
+            let (fill_color, text_color, label) = match sync_phase {
+                1 => (0x07FF, 0x0000, "*SYNC*"), // Cyan fill, black text
+                2 => (0xF81F, 0x0000, "#SYNC#"), // Magenta fill, black text
+                3 => (0xFFE0, 0x0000, "!SYNC!"), // Yellow fill, black text
+                _ => (0x07E0, 0x0000, "~SYNC~"), // Green fill, black text
+            };
+            self.fill_rect(BADGE_X, BADGE_Y, BADGE_W, BADGE_H, fill_color);
+            self.draw_text(BADGE_X + 2, BADGE_Y, label, text_color, fill_color);
+        }
+
+        self.last_sync_phase = sync_phase;
+    }
+
+    /// Live ST7735 mesh activity & throughput dashboard (4 Hz target).
+    /// Avoids full-screen rewrites via dirty-region character diffing.
+    pub fn render_dashboard(
+        &mut self,
+        local_node_id: u32,
+        channel: u8,
+        freq_str: &str,
+        storage_mode: StorageModeStatus,
+        rx_count: u32,
+        tx_count: u32,
+        sram_used: usize,
+        dropped: u32,
+        peer1: Option<PeerMetric>,
+        peer2: Option<PeerMetric>,
+        ble_pin: Option<u32>,
+        btn_active: bool,
+        sync_phase: u8,
+    ) {
+        // Line 0: Local Node ID + Encrypted Sync Animation Indicator Badge
+        let mut line0 = StrBuf::<32>::new();
+        let _ = write!(line0, "Node: {:08X}", local_node_id);
+        self.draw_dirty_line(0, line0.as_str(), 0x07FF, 0x0000); // Cyan
+        self.render_sync_indicator(sync_phase);
+
+        // Line 1: IEEE 802.15.4 Channel & Frequency
+        let mut line1 = StrBuf::<32>::new();
+        let _ = write!(line1, "Ch: {} / {}", channel, freq_str);
+        self.draw_dirty_line(1, line1.as_str(), 0xFFFF, 0x0000); // White
+
+        // Line 2: Storage Subsystem Mode (FAT32 Active vs RAM Only)
+        let (sd_text, sd_color) = match storage_mode {
+            StorageModeStatus::RamOnly => ("Storage: RAM Only", 0xFFE0), // Yellow
+            StorageModeStatus::MicroSdActive => ("Storage: FAT32 Active", 0x07E0), // Green
+        };
+        self.draw_dirty_line(2, sd_text, sd_color, 0x0000);
+
+        // Line 3: Throughput Mesh Packet Counters
+        let mut line3 = StrBuf::<32>::new();
+        let _ = write!(line3, "RX: {:<6} TX: {:<6}", rx_count, tx_count);
+        self.draw_dirty_line(3, line3.as_str(), 0xFFFF, 0x0000);
+
+        // Line 4: SRAM Ring Buffer Utilization & Drops
+        let mut line4 = StrBuf::<32>::new();
+        let _ = write!(line4, "SRAM:{:>3}/256 DRP:{}", sram_used, dropped);
+        self.draw_dirty_line(4, line4.as_str(), 0xCE79, 0x0000);
+
+        // Line 5: Primary Mesh Peer & Signal Metrics (RSSI dBm + Hardware LQI)
+        let mut line5 = StrBuf::<32>::new();
+        if let Some(p) = peer1 {
+            let _ = write!(line5, "P1:{:08X} {:>3}dBm L{:<3}", p.node_id, p.last_rssi, p.last_lqi);
+            self.draw_dirty_line(5, line5.as_str(), 0x07FF, 0x0000); // Cyan
+        } else {
+            self.draw_dirty_line(5, "Peer: <Scanning 2.4G>", 0x7BEF, 0x0000); // Dim Slate
+        }
+
+        // Line 6: Secondary Peer OR BLE Security Prompts / Beacon Events
+        let mut line6 = StrBuf::<32>::new();
+        if let Some(pin) = ble_pin {
+            let _ = write!(line6, "PAIR PIN: {:06}", pin);
+            self.draw_dirty_line(6, line6.as_str(), 0xFD20, 0x0000); // Orange/Amber
+        } else if btn_active {
+            self.draw_dirty_line(6, "BTN: BEACON SENT!    ", 0x07E0, 0x0000); // Bright Green
+        } else if let Some(p2) = peer2 {
+            let _ = write!(line6, "P2:{:08X} {:>3}dBm L{:<3}", p2.node_id, p2.last_rssi, p2.last_lqi);
+            self.draw_dirty_line(6, line6.as_str(), 0x57EA, 0x0000); // Light Green
+        } else {
+            self.draw_dirty_line(6, "BLE: READY [TAP BOOT]", 0xAD55, 0x0000); // Dim Slate
+        }
+    }
+
     /// High-level Gibberish dashboard status render (4 Hz update)
     pub fn render_status(
         &mut self,
@@ -242,36 +407,21 @@ impl<'a, 'd> St7735<'a, 'd> {
         ble_pin: Option<u32>,
         btn_active: bool,
     ) {
-        // Line 0: Header Banner
-        self.draw_text(4, 4, "=== GIBBERISH MESH ===", 0x07FF, 0x0000); // Cyan
-
-        // Line 1: Storage Status (Yellow if RAM only, Green if SD active)
-        let (sd_text, sd_color) = match storage_mode {
-            StorageModeStatus::RamOnly => ("SD: NONE <RAM ONLY>", 0xFFE0), // Yellow
-            StorageModeStatus::MicroSdActive => ("SD: FAT32 ACTIVE  ", 0x07E0), // Green
-        };
-        self.draw_text(4, 18, sd_text, sd_color, 0x0000);
-
-        // Line 2: Mesh RX/TX Counts
-        let mut line2 = StrBuf::<32>::new();
-        let _ = write!(line2, "RX:{:<5} TX:{:<5}", rx_count, tx_count);
-        self.draw_text(4, 32, line2.as_str(), 0xFFFF, 0x0000);
-
-        // Line 3: SRAM Ring & Drops
-        let mut line3 = StrBuf::<32>::new();
-        let _ = write!(line3, "RAM:{}/256 DRP:{}", sram_used, dropped);
-        self.draw_text(4, 46, line3.as_str(), 0xCE79, 0x0000);
-
-        // Line 4: BLE Companion / PIN Prompt
-        if let Some(pin) = ble_pin {
-            let mut pin_line = StrBuf::<32>::new();
-            let _ = write!(pin_line, "PAIR PIN: {:06}", pin);
-            self.draw_text(4, 60, pin_line.as_str(), 0xFD20, 0x0000); // Orange/Amber
-        } else if btn_active {
-            self.draw_text(4, 60, "BTN: BEACON SENT!    ", 0x07E0, 0x0000); // Bright Green
-        } else {
-            self.draw_text(4, 60, "BLE: READY [TAP BOOT]", 0xAD55, 0x0000);
-        }
+        self.render_dashboard(
+            0,
+            15,
+            "2.425 GHz",
+            storage_mode,
+            rx_count,
+            tx_count,
+            sram_used,
+            dropped,
+            None,
+            None,
+            ble_pin,
+            btn_active,
+            0,
+        );
     }
 }
 

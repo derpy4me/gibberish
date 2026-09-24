@@ -18,8 +18,8 @@ use esp_hal::time::Rate;
 use esp_println::println;
 
 use gibberish_protocol::{
-    is_valid_network_tag, ClosedTelemetry, DebugTelemetryPayload, DiagnosticEventCode,
-    TelemetryTier, CIPHERTEXT_LEN, DEFAULT_NETWORK_TAG, FLAG_TELEMETRY,
+    is_valid_network_tag, ClosedTelemetry, DebugTelemetryPayload, DiagnosticEventCode, PeerTable,
+    TelemetryTier, CIPHERTEXT_LEN, DEFAULT_NETWORK_TAG, FLAG_CLIPBOARD, FLAG_TELEMETRY,
 };
 use gibberish_storage::sram_ring::SramRingBuffer;
 
@@ -109,18 +109,28 @@ fn main() -> ! {
     };
     println!("Storage initialized: Mode = {:?}", storage.mode());
 
+    // 7. Active Mesh Peer Table (Recent 4 peers with RSSI dBm & hardware LQI)
+    let mut peer_table = PeerTable::new();
+    let mut sync_anim_ticks: u8 = 0;
+
     // Paint initial dashboard immediately
-    display.render_status(
+    display.render_dashboard(
+        local_node_id,
+        15,
+        "2.425 GHz",
         storage.mode(),
         0,
         0,
         sram_ring.len(),
         sram_ring.dropped_count(),
         None,
+        None,
+        None,
         false,
+        0,
     );
 
-    // 7. Radio Deduplication (Sliding Bloom Filter + LRU)
+    // 8. Radio Deduplication (Sliding Bloom Filter + LRU)
     let mut bloom_filter = SlidingBloomFilter::new();
 
     // 8. TDM Arbiter (200ms cycle: 802.15.4 + BLE Coexistence)
@@ -329,6 +339,27 @@ fn main() -> ! {
                         continue;
                     }
 
+                    // Determine sender node ID from 802.15.4 PHY header or debug telemetry payload
+                    let effective_src_node = if rx.src_node_id != 0 {
+                        rx.src_node_id
+                    } else if (packet.header.flags & FLAG_TELEMETRY) != 0
+                        && packet.payload.get(20).copied() == Some(TelemetryTier::Debug as u8)
+                    {
+                        DebugTelemetryPayload::deserialize(&packet.payload).node_id()
+                    } else {
+                        0
+                    };
+
+                    // Record peer metrics once per received frame
+                    if effective_src_node != 0 && effective_src_node != local_node_id {
+                        peer_table.record_peer(effective_src_node, rx.rssi, rx.lqi);
+                    }
+
+                    // Check for encrypted clipboard sync frame
+                    if (packet.header.flags & FLAG_CLIPBOARD) != 0 {
+                        sync_anim_ticks = 8; // 2 seconds pulsating animation at 4 Hz
+                    }
+
                     // Check if this is a TELEMETRY frame (R2, R4, R5, R10)
                     // Telemetry frames have TTL=1, are consumed locally, and MUST NOT pollute the
                     // mesh deduplication bloom filter or cancel pending user packets via overhearing.
@@ -338,9 +369,9 @@ fn main() -> ! {
                         telemetry.last_event = DiagnosticEventCode::RadioRxOk;
                         telemetry.last_rssi = rx.rssi;
 
-                        if packet.payload[20] == (TelemetryTier::Debug as u8) {
+                        if packet.payload.get(20).copied() == Some(TelemetryTier::Debug as u8) {
                             let dbg = DebugTelemetryPayload::deserialize(&packet.payload);
-                            let node_id = if dbg.node_id() != 0 { dbg.node_id() } else { rx.src_node_id };
+                            let node_id = if effective_src_node != 0 { effective_src_node } else { dbg.node_id() };
                             println!(
                                 "[Telemetry RX] Node: {:08X}, Tier: {:?}, Storage: {:?}, Uptime: {}s, SRAM: {}/256, Drops: {}, RX: {}, TX: {}, RSSI: {} dBm, LQI: {}",
                                 node_id,
@@ -355,10 +386,9 @@ fn main() -> ! {
                                 rx.lqi
                             );
                         } else if let Ok(closed) = postcard::from_bytes::<ClosedTelemetry>(&packet.payload) {
-                            let node_id = rx.src_node_id;
                             println!(
                                 "[Telemetry RX] Node: {:08X}, Tier: {:?}, Storage: {:?}, Uptime: {}s, SRAM: {}/256, Drops: {}, RX: {}, TX: {}, RSSI: {} dBm, LQI: {}",
-                                node_id,
+                                effective_src_node,
                                 TelemetryTier::Prod,
                                 closed.storage_mode,
                                 closed.uptime_secs,
@@ -370,10 +400,9 @@ fn main() -> ! {
                                 rx.lqi
                             );
                         } else {
-                            let node_id = rx.src_node_id;
                             println!(
                                 "[Telemetry RX] Node: {:08X}, Tier: {:?}, Uptime: {}s, SRAM: {}/256, Drops: {}, RSSI: {} dBm, LQI: {}",
-                                node_id,
+                                effective_src_node,
                                 TelemetryTier::Debug,
                                 0,
                                 0,
@@ -480,6 +509,9 @@ fn main() -> ! {
                     if usb_pkt_idx == 114 {
                         let packet = gibberish_protocol::MeshPacket::deserialize_payload(&usb_pkt_buf);
                         if is_valid_network_tag(packet.header.network_tag) {
+                            if (packet.header.flags & FLAG_CLIPBOARD) != 0 {
+                                sync_anim_ticks = 8; // Trigger encrypted sync animation on transmission
+                            }
                             println!(
                                 "[USB RX] MsgID: {:08X}, Chunk: {}/{}",
                                 packet.header.msg_id, packet.header.chunk_idx, packet.header.total_chunks
@@ -520,12 +552,9 @@ fn main() -> ! {
             }
         }
 
-        // Periodic Dashboard Refresh (approx 4 Hz / every 50 loops * 5ms = 250ms)
-        if loop_tick % 50 == 0 {
+        // 1 Hz system uptime & diagnostic heartbeat (every 200 loops * 5ms = 1000ms)
+        if loop_tick % 200 == 0 {
             telemetry.uptime_secs = telemetry.uptime_secs.saturating_add(1);
-            telemetry.sram_ring_used = sram_ring.len() as u16;
-            telemetry.dropped_count = sram_ring.dropped_count();
-            telemetry.storage_mode = storage.mode();
 
             if telemetry.uptime_secs % 2 == 0 {
                 println!(
@@ -537,20 +566,41 @@ fn main() -> ! {
                     sram_ring.dropped_count()
                 );
             }
+        }
+
+        // Periodic Dashboard Refresh (approx 4 Hz / every 50 loops * 5ms = 250ms)
+        if loop_tick % 50 == 0 {
+            telemetry.sram_ring_used = sram_ring.len() as u16;
+            telemetry.dropped_count = sram_ring.dropped_count();
+            telemetry.storage_mode = storage.mode();
 
             let ble_pin = match ble_gate.state() {
                 BleAuthState::PairingRequested { pin, .. } => Some(pin),
                 _ => None,
             };
 
-            display.render_status(
+            let sync_phase = if sync_anim_ticks > 0 {
+                let phase = ((sync_anim_ticks % 4) + 1) as u8;
+                sync_anim_ticks -= 1;
+                phase
+            } else {
+                0
+            };
+
+            display.render_dashboard(
+                local_node_id,
+                15,
+                "2.425 GHz",
                 storage.mode(),
                 telemetry.rx_packet_count,
                 telemetry.tx_packet_count,
                 sram_ring.len(),
                 sram_ring.dropped_count(),
+                peer_table.primary_peer(),
+                peer_table.secondary_peer(),
                 ble_pin,
                 btn_flash_ticks > 0,
+                sync_phase,
             );
         }
     }

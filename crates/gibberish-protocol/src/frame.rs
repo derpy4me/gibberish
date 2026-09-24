@@ -350,3 +350,146 @@ impl DebugTelemetryPayload {
         ])
     }
 }
+
+/// Captured peer link metrics from received airwave frames
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerMetric {
+    pub node_id: u32,
+    pub last_rssi: i8,
+    pub last_lqi: u8,
+    pub packet_count: u32,
+}
+
+impl PeerMetric {
+    pub const fn new(node_id: u32, last_rssi: i8, last_lqi: u8) -> Self {
+        Self {
+            node_id,
+            last_rssi,
+            last_lqi,
+            packet_count: 1,
+        }
+    }
+}
+
+pub const PEER_TABLE_CAPACITY: usize = 4;
+
+/// Bounded LRU/MRU table of active mesh peers for UI and telemetry.
+/// Entries are maintained in order of recency of contact (index 0 is least-recently used,
+/// last non-None index is most-recently active).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerTable {
+    pub peers: [Option<PeerMetric>; PEER_TABLE_CAPACITY],
+}
+
+impl PeerTable {
+    pub const fn new() -> Self {
+        Self {
+            peers: [None; PEER_TABLE_CAPACITY],
+        }
+    }
+
+    /// Number of active tracked peers in the table
+    pub fn len(&self) -> usize {
+        let mut count = 0;
+        for p in self.peers.iter() {
+            if p.is_some() {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// Whether the table has no tracked peers
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Looks up a peer metric by 32-bit Node ID
+    pub fn get_peer(&self, node_id: u32) -> Option<PeerMetric> {
+        if node_id == 0 {
+            return None;
+        }
+        for p in self.peers.iter() {
+            if let Some(peer) = p {
+                if peer.node_id == node_id {
+                    return Some(*peer);
+                }
+            }
+        }
+        None
+    }
+
+    /// Records or updates an active peer node in the table.
+    /// Uses true LRU/MRU ordering: active peers are promoted to the MRU position
+    /// (end of active entries), ensuring active communicating peers are never prematurely evicted.
+    pub fn record_peer(&mut self, node_id: u32, rssi: i8, lqi: u8) {
+        // Node ID 0 is invalid/reserved broadcast address in the Gibberish mesh protocol
+        if node_id == 0 {
+            return;
+        }
+
+        // 1. If peer already exists, update and promote to MRU
+        for i in 0..PEER_TABLE_CAPACITY {
+            if let Some(mut peer) = self.peers[i] {
+                if peer.node_id == node_id {
+                    peer.last_rssi = rssi;
+                    peer.last_lqi = lqi;
+                    peer.packet_count = peer.packet_count.saturating_add(1);
+
+                    // Find last active slot index
+                    let mut last_idx = i;
+                    for j in (i + 1)..PEER_TABLE_CAPACITY {
+                        if self.peers[j].is_some() {
+                            last_idx = j;
+                        }
+                    }
+
+                    // Shift elements down between i and last_idx
+                    for j in i..last_idx {
+                        self.peers[j] = self.peers[j + 1];
+                    }
+                    self.peers[last_idx] = Some(peer);
+                    return;
+                }
+            }
+        }
+
+        // 2. If peer does not exist, find first empty slot
+        for i in 0..PEER_TABLE_CAPACITY {
+            if self.peers[i].is_none() {
+                self.peers[i] = Some(PeerMetric::new(node_id, rssi, lqi));
+                return;
+            }
+        }
+
+        // 3. Table is full: evict LRU entry (slot 0), shift left, and insert at MRU (end)
+        for i in 0..(PEER_TABLE_CAPACITY - 1) {
+            self.peers[i] = self.peers[i + 1];
+        }
+        self.peers[PEER_TABLE_CAPACITY - 1] = Some(PeerMetric::new(node_id, rssi, lqi));
+    }
+
+    pub fn primary_peer(&self) -> Option<PeerMetric> {
+        // Most recent peer is the last non-None entry
+        for p in self.peers.iter().rev() {
+            if let Some(peer) = p {
+                return Some(*peer);
+            }
+        }
+        None
+    }
+
+    pub fn secondary_peer(&self) -> Option<PeerMetric> {
+        let mut count = 0;
+        for p in self.peers.iter().rev() {
+            if let Some(peer) = p {
+                if count == 1 {
+                    return Some(*peer);
+                }
+                count += 1;
+            }
+        }
+        None
+    }
+}
+

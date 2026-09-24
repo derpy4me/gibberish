@@ -1,0 +1,13 @@
+#!/bin/sh
+# Project Gibberish GitHub CLI wrapper
+# Ensures all gh operations in this workspace use derpy4me without modifying global active-account
+
+if [ -z "$GH_TOKEN" ]; then
+    TOKEN=$(gh auth token --user derpy4me 2>/dev/null || true)
+    if [ -n "$TOKEN" ]; then
+        export GH_TOKEN="$TOKEN"
+    fi
+fi
+
+exec gh "$@"
+
