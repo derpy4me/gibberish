@@ -28,6 +28,22 @@ pub const FLAG_CLIPBOARD: u16 = 0x0004;
 pub const FLAG_SNEAKERNET: u16 = 0x0008;
 pub const FLAG_ACK_REQ: u16 = 0x0010;
 pub const FLAG_TELEMETRY: u16 = 0x0020;
+pub const FLAG_SACK: u16 = 0x0040;
+
+/// Minimum Link Quality Indicator (0-255) required to relay a packet (Issue #2).
+/// Prevents fringe nodes with poor SNR (RSSI < -74 dBm) from repeating corrupted packets.
+pub const MIN_RELAY_LQI: u8 = 30;
+
+/// Calculate LQI/RSSI-weighted contention backoff delay in milliseconds (Issue #2).
+/// Stronger links (high LQI) relay first with minimal backoff (15-30ms),
+/// while weaker links (low LQI) wait longer (45-65ms), allowing stronger relays
+/// to take precedence and trigger overhearing cancellation of redundant transmissions.
+#[inline]
+pub fn calculate_lqi_relay_jitter(lqi: u8, random_val: u16) -> u16 {
+    let inv_lqi = 255u16.saturating_sub(lqi as u16);
+    let base_delay = 15 + (inv_lqi * 35) / 255;
+    base_delay + (random_val % 15)
+}
 
 /// Default Network Tag: "GIBBERIS" in big-endian ASCII
 pub const DEFAULT_NETWORK_TAG: u64 = 0x4749424245524953;
@@ -128,6 +144,121 @@ impl MeshPacket {
             true
         } else {
             false
+        }
+    }
+}
+
+/// Maximum number of chunks represented in a single SACK bitmask.
+/// 64 bytes * 8 bits = 512 chunks (512 * 80 bytes = 40,960 bytes).
+pub const SACK_BITMASK_BYTES: usize = 64;
+
+/// Selective Acknowledgment (SACK) payload carried in a MeshPacket payload (CIPHERTEXT_LEN = 96B).
+/// Used to selectively request missing chunks or confirm received chunks without retransmitting the whole payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SackPayload {
+    /// 32-bit Node ID of the receiver generating the SACK
+    pub receiver_node_id: u32,
+    /// 32-bit Node ID of the original sender/target
+    pub sender_node_id: u32,
+    /// Base chunk offset for this bitmask window (typically 0)
+    pub base_chunk: u16,
+    /// Bitmask indicating missing chunks (1 = missing/requested retransmit, 0 = received or out of range)
+    pub bitmask: [u8; SACK_BITMASK_BYTES],
+}
+
+impl SackPayload {
+    pub const BYTE_LEN: usize = CIPHERTEXT_LEN; // 96 bytes
+
+    pub const fn new(receiver_node_id: u32, sender_node_id: u32, base_chunk: u16) -> Self {
+        Self {
+            receiver_node_id,
+            sender_node_id,
+            base_chunk,
+            bitmask: [0u8; SACK_BITMASK_BYTES],
+        }
+    }
+
+    /// Mark a chunk index as missing (bit = 1)
+    pub fn mark_missing(&mut self, chunk_idx: usize) {
+        let base = self.base_chunk as usize;
+        let max_chunks = SACK_BITMASK_BYTES * 8;
+        if chunk_idx >= base && chunk_idx < base + max_chunks {
+            let offset = chunk_idx - base;
+            self.bitmask[offset / 8] |= 1 << (offset % 8);
+        }
+    }
+
+    /// Mark a chunk index as received (bit = 0)
+    pub fn mark_received(&mut self, chunk_idx: usize) {
+        let base = self.base_chunk as usize;
+        let max_chunks = SACK_BITMASK_BYTES * 8;
+        if chunk_idx >= base && chunk_idx < base + max_chunks {
+            let offset = chunk_idx - base;
+            self.bitmask[offset / 8] &= !(1 << (offset % 8));
+        }
+    }
+
+    /// Query whether a specific chunk index is marked as missing
+    pub fn is_missing(&self, chunk_idx: usize) -> bool {
+        let base = self.base_chunk as usize;
+        let max_chunks = SACK_BITMASK_BYTES * 8;
+        if chunk_idx >= base && chunk_idx < base + max_chunks {
+            let offset = chunk_idx - base;
+            (self.bitmask[offset / 8] & (1 << (offset % 8))) != 0
+        } else {
+            false
+        }
+    }
+
+    /// Returns the total number of missing chunks in this SACK bitmask
+    pub fn missing_count(&self) -> usize {
+        let mut count = 0;
+        for byte in self.bitmask.iter() {
+            count += byte.count_ones() as usize;
+        }
+        count
+    }
+
+    /// Returns true if all chunks are received (bitmask is all zeros).
+    /// Used for end-to-end delivery confirmations (ACK).
+    pub fn is_full_ack(&self) -> bool {
+        self.bitmask.iter().all(|&b| b == 0)
+    }
+
+    /// Iterates over every chunk index marked as missing in this bitmask
+    pub fn for_each_missing<F: FnMut(usize)>(&self, mut f: F) {
+        let base = self.base_chunk as usize;
+        for (byte_idx, &byte) in self.bitmask.iter().enumerate() {
+            if byte == 0 {
+                continue;
+            }
+            for bit in 0..8 {
+                if (byte & (1 << bit)) != 0 {
+                    f(base + byte_idx * 8 + bit);
+                }
+            }
+        }
+    }
+
+    pub fn serialize(&self, out: &mut [u8; CIPHERTEXT_LEN]) {
+        out.fill(0);
+        out[0..4].copy_from_slice(&self.receiver_node_id.to_be_bytes());
+        out[4..8].copy_from_slice(&self.sender_node_id.to_be_bytes());
+        out[8..10].copy_from_slice(&self.base_chunk.to_be_bytes());
+        out[10..10 + SACK_BITMASK_BYTES].copy_from_slice(&self.bitmask);
+    }
+
+    pub fn deserialize(buf: &[u8; CIPHERTEXT_LEN]) -> Self {
+        let receiver_node_id = u32::from_be_bytes(buf[0..4].try_into().unwrap());
+        let sender_node_id = u32::from_be_bytes(buf[4..8].try_into().unwrap());
+        let base_chunk = u16::from_be_bytes(buf[8..10].try_into().unwrap());
+        let mut bitmask = [0u8; SACK_BITMASK_BYTES];
+        bitmask.copy_from_slice(&buf[10..10 + SACK_BITMASK_BYTES]);
+        Self {
+            receiver_node_id,
+            sender_node_id,
+            base_chunk,
+            bitmask,
         }
     }
 }

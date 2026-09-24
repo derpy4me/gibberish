@@ -192,6 +192,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .map_err(|e| format!("Crypto error: {:?}", e))?;
 
+        chunk_engine.cache_outbound(&packets);
+
         if let Some((primary_port, t)) = transports.first_mut() {
             for pkt in &packets {
                 t.send_packet(pkt)?;
@@ -248,6 +250,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             for wire_pkt in packets {
+                // Check if this is a Selective Acknowledgment (SACK) frame (Issue #3)
+                if (wire_pkt.packet.header.flags & gibberish_protocol::FLAG_SACK) != 0 {
+                    chunk_engine.suppress_sack(wire_pkt.packet.header.msg_id);
+                    let retransmit = chunk_engine.handle_sack(&wire_pkt.packet);
+                    if !retransmit.is_empty() {
+                        log.log(&format!(
+                            "[SACK Retransmit] Peer 0x{:08X} requested {} missing chunks for MsgID 0x{:08X}. Retransmitting...",
+                            wire_pkt.src_node_id,
+                            retransmit.len(),
+                            wire_pkt.packet.header.msg_id,
+                        ));
+                        for pkt in &retransmit {
+                            let _ = t.send_packet(pkt);
+                            sleep(Duration::from_millis(20)).await;
+                        }
+                    }
+                    continue;
+                }
+
                 match chunk_engine.ingest_packet(
                     wire_pkt.src_node_id,
                     &wire_pkt.packet,
@@ -303,6 +324,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             packets.len()
                         ));
 
+                        chunk_engine.cache_outbound(&packets);
+
                         if let Some((primary_port, t)) = transports.first_mut() {
                             for pkt in &packets {
                                 if let Err(e) = t.send_packet(pkt) {
@@ -322,6 +345,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Err(e) => {
                         log.log(&format!("Encryption / Chunking error: {:?}", e));
                     }
+                }
+            }
+        }
+
+        // 3. Selective Acknowledgment (SACK): poll for missing chunks and broadcast recovery bitmasks (Issue #3)
+        let pending_sacks = chunk_engine.check_pending_sacks(local_node_id, swarm_tag);
+        if !pending_sacks.is_empty() {
+            if let Some((_primary_port, t)) = transports.first_mut() {
+                for sack_pkt in &pending_sacks {
+                    let sack_payload = gibberish_protocol::SackPayload::deserialize(&sack_pkt.payload);
+                    log.log(&format!(
+                        "[SACK Recovery] Broadcasted NACK bitmask for MsgID 0x{:08X} (missing {} chunks) to Peer 0x{:08X}",
+                        sack_pkt.header.msg_id,
+                        sack_payload.missing_count(),
+                        sack_payload.sender_node_id
+                    ));
+                    let _ = t.send_packet(sack_pkt);
                 }
             }
         }

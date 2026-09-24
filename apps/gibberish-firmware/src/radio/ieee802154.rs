@@ -3,9 +3,11 @@
 use esp_hal::peripherals::IEEE802154;
 use esp_radio::ieee802154::{Config as RadioConfig, Ieee802154};
 use gibberish_protocol::{
-    is_valid_network_tag, MeshHeader, MeshPacket, CIPHERTEXT_LEN, MESH_HEADER_LEN, MHR_LEN,
-    PHY_MTU,
+    calculate_lqi_relay_jitter, is_valid_network_tag, MeshHeader, MeshPacket, CIPHERTEXT_LEN,
+    MESH_HEADER_LEN, MHR_LEN, PHY_MTU,
 };
+
+pub use gibberish_protocol::MIN_RELAY_LQI;
 
 pub const CHANNEL_15_FREQ_MHZ: u16 = 2425;
 pub const PAN_ID_BROADCAST: u16 = 0xFFFF;
@@ -145,9 +147,18 @@ impl BackoffController {
         }
     }
 
-    /// Schedule a packet for transmission with randomized contention backoff (15–60ms)
+    /// Calculate LQI/RSSI-weighted contention backoff delay in milliseconds (Issue #2).
+    /// Stronger links (high LQI) relay first with minimal backoff (15-30ms),
+    /// while weaker links (low LQI) wait longer (45-65ms), allowing stronger relays
+    /// to take precedence and trigger overhearing cancellation of redundant transmissions.
+    #[inline]
+    pub fn calculate_lqi_relay_jitter(lqi: u8, random_val: u16) -> u16 {
+        calculate_lqi_relay_jitter(lqi, random_val)
+    }
+
+    /// Schedule a packet for transmission with contention backoff (15–90ms)
     pub fn schedule_tx(&mut self, packet: MeshPacket, jitter_ms: u16) {
-        let clamped_jitter = jitter_ms.clamp(15, 60);
+        let clamped_jitter = jitter_ms.clamp(15, 90);
         if self.count < TX_QUEUE_CAPACITY {
             self.queue[self.tail] = Some(packet);
             self.tail = (self.tail + 1) % TX_QUEUE_CAPACITY;

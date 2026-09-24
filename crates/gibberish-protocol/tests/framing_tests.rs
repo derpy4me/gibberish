@@ -89,6 +89,7 @@ fn test_flag_telemetry_orthogonality() {
         FLAG_SNEAKERNET,
         FLAG_ACK_REQ,
         FLAG_TELEMETRY,
+        FLAG_SACK,
     ];
 
     for i in 0..flags.len() {
@@ -97,6 +98,7 @@ fn test_flag_telemetry_orthogonality() {
         }
     }
     assert_eq!(FLAG_TELEMETRY, 0x0020);
+    assert_eq!(FLAG_SACK, 0x0040);
 }
 
 #[test]
@@ -233,6 +235,81 @@ fn test_peer_table_lifecycle_and_eviction() {
     table.record_peer(0, -50, 100);
     assert_eq!(table.len(), 4);
     assert_eq!(table.get_peer(0), None);
+}
+
+#[test]
+fn test_sack_payload_bitmask_operations_and_serialization() {
+    let mut sack = SackPayload::new(0x11223344, 0x55667788, 0);
+    assert_eq!(sack.receiver_node_id, 0x11223344);
+    assert_eq!(sack.sender_node_id, 0x55667788);
+    assert_eq!(sack.base_chunk, 0);
+    assert!(sack.is_full_ack());
+    assert_eq!(sack.missing_count(), 0);
+
+    // Mark chunks 0, 3, 7, 8, 15, 63, 100 as missing
+    let missing_set = [0, 3, 7, 8, 15, 63, 100];
+    for &idx in &missing_set {
+        sack.mark_missing(idx);
+    }
+
+    assert!(!sack.is_full_ack());
+    assert_eq!(sack.missing_count(), missing_set.len());
+
+    for &idx in &missing_set {
+        assert!(sack.is_missing(idx), "Chunk {} should be missing", idx);
+    }
+    assert!(!sack.is_missing(1));
+    assert!(!sack.is_missing(2));
+    assert!(!sack.is_missing(4));
+    assert!(!sack.is_missing(9));
+
+    // Test visitor iteration
+    let mut iterated_missing = Vec::new();
+    sack.for_each_missing(|idx| iterated_missing.push(idx));
+    assert_eq!(iterated_missing, missing_set.to_vec());
+
+    // Mark chunk 3 as received
+    sack.mark_received(3);
+    assert!(!sack.is_missing(3));
+    assert_eq!(sack.missing_count(), missing_set.len() - 1);
+
+    // Roundtrip serialization into 96-byte CIPHERTEXT_LEN buffer
+    let mut wire = [0u8; CIPHERTEXT_LEN];
+    sack.serialize(&mut wire);
+
+    let deserialized = SackPayload::deserialize(&wire);
+    assert_eq!(deserialized.receiver_node_id, 0x11223344);
+    assert_eq!(deserialized.sender_node_id, 0x55667788);
+    assert_eq!(deserialized.base_chunk, 0);
+    assert_eq!(deserialized.missing_count(), missing_set.len() - 1);
+    assert_eq!(sack, deserialized);
+}
+
+#[test]
+fn test_lqi_backoff_and_gating() {
+    assert_eq!(MIN_RELAY_LQI, 30);
+
+    // High LQI (e.g. 255): minimal backoff (15-30ms)
+    let jitter_255_min = calculate_lqi_relay_jitter(255, 0);
+    let jitter_255_max = calculate_lqi_relay_jitter(255, 14);
+    assert_eq!(jitter_255_min, 15);
+    assert_eq!(jitter_255_max, 29);
+
+    // Minimum relay LQI (30): higher backoff (45-60ms)
+    let jitter_30_min = calculate_lqi_relay_jitter(30, 0);
+    let jitter_30_max = calculate_lqi_relay_jitter(30, 14);
+    assert!(jitter_30_min >= 45, "Expected >= 45, got {}", jitter_30_min);
+    assert!(jitter_30_max <= 60, "Expected <= 60, got {}", jitter_30_max);
+
+    // Monotonic scaling: higher link quality must always have lower or equal base delay
+    let base_255 = calculate_lqi_relay_jitter(255, 0);
+    let base_200 = calculate_lqi_relay_jitter(200, 0);
+    let base_100 = calculate_lqi_relay_jitter(100, 0);
+    let base_30 = calculate_lqi_relay_jitter(30, 0);
+
+    assert!(base_255 < base_200);
+    assert!(base_200 < base_100);
+    assert!(base_100 < base_30);
 }
 
 

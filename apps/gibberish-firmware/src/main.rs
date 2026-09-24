@@ -453,10 +453,13 @@ fn main() -> ! {
                     // Push to authoritative SRAM ring buffer (which auto-flushes to SD or buffers in RAM)
                     sram_ring.push(packet);
 
-                    // Mesh relay: forward if TTL > 0
+                    // Mesh relay: forward if TTL > 0 and link quality satisfies minimum threshold (Issue #2)
                     let mut fwd_packet = packet;
-                    if fwd_packet.decrement_ttl() {
-                        let jitter = (hw_rng.random() % 46) as u16 + 15; // 15..=60ms
+                    if rx.lqi >= crate::radio::ieee802154::MIN_RELAY_LQI && fwd_packet.decrement_ttl() {
+                        let jitter = BackoffController::calculate_lqi_relay_jitter(
+                            rx.lqi,
+                            (hw_rng.random() % 15) as u16,
+                        );
                         backoff.schedule_tx(fwd_packet, jitter);
                     }
 

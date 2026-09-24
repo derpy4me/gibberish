@@ -47,6 +47,7 @@ gibberish/
 │   ├── gibberish-protocol/     # 127-byte PHY frame serialization & Network Tag
 │   └── gibberish-storage/      # 32KB SRAM ring & pre-allocated FAT32 container
 ├── docs/
+│   ├── ideation/               # Tracked architectural ideas & brainstorm backlog
 │   ├── plans/                  # Unified planning documents & milestone history
 │   └── solutions/              # Problem-solution records & root cause fixes
 ├── tests/

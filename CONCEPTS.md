@@ -42,6 +42,13 @@ A priority scheduling discipline in a half-duplex radio backoff controller where
 ### Off-Grid Telemetry Sink
 A workstation-attached radio transceiver node that overhears in-band IEEE 802.15.4 broadcast airwaves without IP, cellular, or Wi-Fi infrastructure, decoding raw physical frames from field nodes and streaming structured diagnostic telemetry to host companion daemons over USB CDC.
 
+### Dirty-Region Character Caching
+A display rendering technique where the driver caches character glyphs, foreground colors, and background colors across each text line, diffing them prior to transmission so that only modified character cells emit SPI address windowing (`CASET`/`RASET`) and pixel stream writes. On microcontroller systems where an LCD shares an SPI bus with high-throughput peripherals like MicroSD card slots, this cuts bus traffic by >95% and eliminates bus starvation.
+
+### Decoupled Event Loop Timing
+The software architectural pattern in bare-metal polling loops of keeping slow display refresh cadences (such as a 4 Hz LCD update, 250ms) strictly decoupled from monotonic system timekeeping (such as 1 Hz uptime counters, 1000ms), preventing display pacing adjustments or SPI transmission stalls from warping diagnostic telemetry timekeeping.
+
+
 ## Zero-Trust Cryptography & Host Synchronization
 
 ### Asymmetric USB-CDC Framing
@@ -58,4 +65,16 @@ A loopback suppression mechanism for synchronized clipboard daemons that records
 
 ### MAC-Layer Promiscuous Loopback Suppression
 A packet filtering discipline in raw IEEE 802.15.4 promiscuous mesh transceivers where the low-level radio polling loop compares the MAC Header (MHR) Source Short Address against the local device's hardware MAC address (`raw.data[8..12] == local_mac[4..8]`) and immediately discards self-transmitted airwave reflections before cryptographic decryption, payload processing, or host serial forwarding.
+
+## Mesh Messaging & Client Architecture
+
+### Hybrid Asymmetric Delivery
+A traffic-class segregation pattern in half-duplex mesh networks where broadcast channels (#all Swarm) use fire-and-forget delivery without ACKs to eliminate packet collisions and broadcast ACK implosion, while pairwise direct messages use cryptographic end-to-end selective acknowledgments (SACK).
+
+### Beacon-Triggered DTN Outbox
+A delay-tolerant networking pattern where messages addressed to offline mesh stations queue in a local bounded buffer and flush opportunistically upon overhearing the recipient's periodic airwave announcement beacon, avoiding blind channel-congesting retries into unreachable links.
+
+### Short Authentication String (SAS) Verification
+An out-of-band cryptographic verification pattern where peers mathematically derive a matching 4-word mnemonic or short numeric code from their respective public keys and compare them verbally or via QR code, proving contact authenticity and eliminating airwave impersonation without centralized certificate authorities.
+
 
