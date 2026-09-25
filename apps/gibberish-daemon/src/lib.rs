@@ -2,6 +2,7 @@
 
 pub mod chunk;
 pub mod clipboard;
+pub mod dtn_outbox;
 pub mod fleet;
 pub mod ipc;
 pub mod nonce;

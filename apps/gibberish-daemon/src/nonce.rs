@@ -176,7 +176,7 @@ mod tests {
 
         let mgr = NonceManager::new(Some(state_path.clone())).unwrap();
         // Even if wall clock is earlier than future_epoch, safe_epoch must advance past it
-        assert!(mgr.current_epoch() >= future_epoch + 1);
+        assert!(mgr.current_epoch() > future_epoch);
 
         let _ = fs::remove_dir_all(&tmp_dir);
     }

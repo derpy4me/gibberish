@@ -354,6 +354,12 @@ pub struct ClosedTelemetry {
     pub last_rssi: i8,
 }
 
+impl Default for ClosedTelemetry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ClosedTelemetry {
     pub fn new() -> Self {
         Self {
@@ -398,6 +404,12 @@ pub struct DebugTelemetryPayload {
     pub node_mac_tail: [u8; 8],
     /// Reserved diagnostic padding
     pub diagnostic_reserve: [u8; 64],
+}
+
+impl Default for DebugTelemetryPayload {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DebugTelemetryPayload {
@@ -512,6 +524,12 @@ pub struct PeerTable {
     pub peers: [Option<PeerMetric>; PEER_TABLE_CAPACITY],
 }
 
+impl Default for PeerTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PeerTable {
     pub const fn new() -> Self {
         Self {
@@ -521,13 +539,7 @@ impl PeerTable {
 
     /// Number of active tracked peers in the table
     pub fn len(&self) -> usize {
-        let mut count = 0;
-        for p in self.peers.iter() {
-            if p.is_some() {
-                count += 1;
-            }
-        }
-        count
+        self.peers.iter().flatten().count()
     }
 
     /// Whether the table has no tracked peers
@@ -540,11 +552,9 @@ impl PeerTable {
         if node_id == 0 {
             return None;
         }
-        for p in self.peers.iter() {
-            if let Some(peer) = p {
-                if peer.node_id == node_id {
-                    return Some(*peer);
-                }
+        for peer in self.peers.iter().flatten() {
+            if peer.node_id == node_id {
+                return Some(*peer);
             }
         }
         None
@@ -602,25 +612,11 @@ impl PeerTable {
 
     pub fn primary_peer(&self) -> Option<PeerMetric> {
         // Most recent peer is the last non-None entry
-        for p in self.peers.iter().rev() {
-            if let Some(peer) = p {
-                return Some(*peer);
-            }
-        }
-        None
+        self.peers.iter().rev().flatten().next().copied()
     }
 
     pub fn secondary_peer(&self) -> Option<PeerMetric> {
-        let mut count = 0;
-        for p in self.peers.iter().rev() {
-            if let Some(peer) = p {
-                if count == 1 {
-                    return Some(*peer);
-                }
-                count += 1;
-            }
-        }
-        None
+        self.peers.iter().rev().flatten().nth(1).copied()
     }
 }
 

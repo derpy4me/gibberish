@@ -4,7 +4,9 @@ members = [
     "crates/gibberish-protocol",
     "crates/gibberish-crypto",
     "crates/gibberish-storage",
+    "crates/gibberish-db",
     "apps/gibberish-daemon",
+    "apps/gibberish-client",
     "tests/integration-sim",
 ]
 exclude = [

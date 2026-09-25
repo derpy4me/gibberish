@@ -1,0 +1,122 @@
+import { ListView } from "std-widgets.slint";
+
+export struct StationItem {
+    node_id: string,
+    alias: string,
+    rssi: string,
+    lqi: string,
+    trust_state: string, // "unverified", "verified"
+    selected: bool,
+}
+
+export component StationRoster inherits Rectangle {
+    in property <[StationItem]> stations: [];
+    in property <string> active_convo_id: "#all";
+    callback station_selected(string);
+
+    width: 220px;
+    background: #090d16;
+    border-width: 1px;
+    border-color: #1e293b;
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 6px;
+
+        Text {
+            text: "--- MESH NODES ---";
+            font-size: 11px;
+            font-weight: 700;
+            color: #38bdf8;
+            horizontal-alignment: center;
+        }
+
+        // Default Swarm Broadcast Channel
+        Rectangle {
+            height: 38px;
+            background: active_convo_id == "#all" ? #1e293b : #0f172a;
+            border-radius: 3px;
+            border-width: active_convo_id == "#all" ? 1px : 0px;
+            border-color: #38bdf8;
+
+            TouchArea {
+                clicked => { root.station_selected("#all"); }
+            }
+
+            HorizontalLayout {
+                padding: 6px;
+                spacing: 6px;
+                alignment: center;
+
+                Text {
+                    text: "#all (Swarm)";
+                    color: #4ade80;
+                    font-size: 12px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        Text {
+            text: "NEARBY STATIONS";
+            font-size: 10px;
+            color: #64748b;
+        }
+
+        ListView {
+            for station in stations: Rectangle {
+                height: 52px;
+                background: station.selected ? #1e293b : #0f172a;
+                border-radius: 3px;
+                border-width: station.selected ? 1px : 0px;
+                border-color: station.trust_state == "verified" ? #22c55e : #f59e0b;
+
+                TouchArea {
+                    clicked => { root.station_selected(station.node_id); }
+                }
+
+                VerticalLayout {
+                    padding: 4px;
+                    spacing: 2px;
+
+                    HorizontalLayout {
+                        Text {
+                            text: station.alias != "" ? station.alias : station.node_id;
+                            color: station.trust_state == "verified" ? #22c55e : #f59e0b;
+                            font-size: 12px;
+                            font-weight: 700;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: station.trust_state == "verified" ? "[V]" : "[?]";
+                            color: station.trust_state == "verified" ? #22c55e : #f59e0b;
+                            font-size: 10px;
+                            horizontal-alignment: right;
+                        }
+                    }
+
+                    Text {
+                        text: station.node_id;
+                        color: #64748b;
+                        font-size: 10px;
+                    }
+
+                    HorizontalLayout {
+                        Text {
+                            text: station.rssi;
+                            color: #94a3b8;
+                            font-size: 9px;
+                        }
+                        Text {
+                            text: station.lqi;
+                            color: #94a3b8;
+                            font-size: 9px;
+                            horizontal-alignment: right;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -13,6 +13,12 @@ pub struct ClipboardManager {
     suppressed_hash: [u8; 32],
 }
 
+impl Default for ClipboardManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ClipboardManager {
     pub fn new() -> Self {
         Self {

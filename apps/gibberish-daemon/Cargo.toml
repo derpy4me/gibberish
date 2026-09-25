@@ -33,6 +33,7 @@ path = "src/bin/ota_mesh_test.rs"
 [dependencies]
 gibberish-protocol = { path = "../../crates/gibberish-protocol" }
 gibberish-crypto = { path = "../../crates/gibberish-crypto" }
+gibberish-db = { path = "../../crates/gibberish-db" }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }

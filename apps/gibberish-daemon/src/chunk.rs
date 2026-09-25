@@ -34,6 +34,12 @@ pub struct ChunkEngine {
     outbox_cache: HashMap<u32, (Vec<MeshPacket>, Instant)>,
 }
 
+impl Default for ChunkEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ChunkEngine {
     pub fn new() -> Self {
         Self {
@@ -57,7 +63,7 @@ impl ChunkEngine {
             return Ok(Vec::new());
         }
 
-        let num_chunks = (raw_bytes.len() + PLAINTEXT_CHUNK_LEN - 1) / PLAINTEXT_CHUNK_LEN;
+        let num_chunks = raw_bytes.len().div_ceil(PLAINTEXT_CHUNK_LEN);
         if num_chunks > MAX_TOTAL_CHUNKS {
             return Err(CryptoError::PayloadTooLarge);
         }
@@ -455,7 +461,7 @@ mod tests {
         assert!(sacks_immediate.is_empty());
 
         // Artificially age the in-flight message past SACK_INITIAL_DELAY
-        for (_, inflight) in receiver_engine.in_flight.iter_mut() {
+        for inflight in receiver_engine.in_flight.values_mut() {
             inflight.last_received -= Duration::from_millis(350);
         }
 
@@ -521,7 +527,7 @@ mod tests {
             .unwrap();
 
         // Age in-flight entry
-        for (_, inflight) in receiver_engine.in_flight.iter_mut() {
+        for inflight in receiver_engine.in_flight.values_mut() {
             inflight.last_received -= Duration::from_millis(350);
         }
 

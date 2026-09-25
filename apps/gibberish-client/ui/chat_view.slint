@@ -1,0 +1,208 @@
+import { ListView } from "std-widgets.slint";
+
+export struct ChatMessageItem {
+    id: string,
+    convo_id: string,
+    sender: string,
+    text: string,
+    timestamp: string,
+    status: string, // "*", "[OK]", "[Q]", "[!]"
+    is_outgoing: bool,
+}
+
+export component ChatView inherits Rectangle {
+    in property <[ChatMessageItem]> messages: [];
+    in property <string> active_convo_id: "#all";
+    in property <string> active_alias: "Swarm Broadcast";
+    in property <string> trust_state: "verified"; // "unverified", "verified"
+    callback send_message(string);
+    callback open_verify(string);
+
+    background: #0f172a;
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 6px;
+
+        // Header
+        Rectangle {
+            height: 42px;
+            background: #1e293b;
+            border-radius: 4px;
+
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 8px;
+                alignment: space-between;
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+
+                    Text {
+                        text: active_convo_id == "#all" ? "#all (Swarm Broadcast)" : (active_alias != "" ? active_alias : active_convo_id);
+                        color: #f8fafc;
+                        font-size: 13px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+
+                    if active_convo_id != "#all": Rectangle {
+                        width: trust_state == "verified" ? 80px : 150px;
+                        height: 22px;
+                        background: trust_state == "verified" ? #14532d : #78350f;
+                        border-radius: 3px;
+                        border-width: 1px;
+                        border-color: trust_state == "verified" ? #22c55e : #f59e0b;
+
+                        Text {
+                            text: trust_state == "verified" ? "[V] VERIFIED" : "[!] UNVERIFIED CONTACT";
+                            color: trust_state == "verified" ? #4ade80 : #fbbf24;
+                            font-size: 10px;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                if active_convo_id != "#all" && trust_state != "verified": Rectangle {
+                    width: 120px;
+                    height: 26px;
+                    background: #f59e0b;
+                    border-radius: 3px;
+
+                    TouchArea {
+                        clicked => { root.open_verify(root.active_convo_id); }
+                    }
+
+                    Text {
+                        text: "VERIFY IDENTITY";
+                        color: #0f172a;
+                        font-size: 10px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // Warning banner for unverified direct chat (AE1)
+        if active_convo_id != "#all" && trust_state == "unverified": Rectangle {
+            height: 28px;
+            background: #451a03;
+            border-radius: 3px;
+            border-width: 1px;
+            border-color: #b45309;
+
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                alignment: center;
+
+                Text {
+                    text: "CAUTION: Node identity unverified. Compare 4-word SAS string out-of-band.";
+                    color: #fde68a;
+                    font-size: 10px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Messages list
+        ListView {
+            for msg in messages: Rectangle {
+                min-height: 28px;
+                background: msg.is_outgoing ? #1e293b : #182234;
+                border-radius: 3px;
+
+                HorizontalLayout {
+                    padding: 6px;
+                    spacing: 8px;
+
+                    Text {
+                        text: "[" + msg.timestamp + "]";
+                        color: #64748b;
+                        font-size: 11px;
+                    }
+
+                    Text {
+                        text: "<" + msg.sender + ">";
+                        color: msg.is_outgoing ? #38bdf8 : #4ade80;
+                        font-size: 11px;
+                        font-weight: 700;
+                    }
+
+                    Text {
+                        text: msg.text;
+                        color: #e2e8f0;
+                        font-size: 11px;
+                        horizontal-stretch: 1;
+                        wrap: word-wrap;
+                    }
+
+                    if msg.status != "": Text {
+                        text: msg.status;
+                        color: msg.status == "[OK]" ? #4ade80 : (msg.status == "[!]" ? #ef4444 : #f59e0b);
+                        font-size: 11px;
+                        font-weight: 700;
+                    }
+                }
+            }
+        }
+
+        // Input strip
+        Rectangle {
+            height: 38px;
+            background: #1e293b;
+            border-radius: 3px;
+            border-width: 1px;
+            border-color: #334155;
+
+            HorizontalLayout {
+                padding: 4px;
+                spacing: 6px;
+
+                input := TextInput {
+                    text: "";
+                    color: #f8fafc;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    accepted => {
+                        if (input.text != "") {
+                            root.send_message(input.text);
+                            input.text = "";
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 70px;
+                    background: #2563eb;
+                    border-radius: 3px;
+
+                    TouchArea {
+                        clicked => {
+                            if (input.text != "") {
+                                root.send_message(input.text);
+                                input.text = "";
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: "SEND";
+                        color: #ffffff;
+                        font-size: 11px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}

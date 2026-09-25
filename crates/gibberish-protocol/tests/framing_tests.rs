@@ -44,8 +44,8 @@ fn test_mesh_packet_payload_roundtrip_and_ttl() {
     };
 
     let mut payload = [0u8; CIPHERTEXT_LEN];
-    for i in 0..CIPHERTEXT_LEN {
-        payload[i] = (i & 0xFF) as u8;
+    for (i, byte) in payload.iter_mut().enumerate().take(CIPHERTEXT_LEN) {
+        *byte = (i as u8).wrapping_add(1);
     }
 
     let mut packet = MeshPacket { header, payload };
@@ -225,7 +225,7 @@ fn test_peer_table_lifecycle_and_eviction() {
     assert_eq!(active_peers, vec![0xCCCC3333, 0xDDDD4444, 0xBBBB2222, 0xEEEE5555]);
     assert_eq!(table.primary_peer().unwrap().node_id, 0xEEEE5555);
 
-    assert_eq!(table.is_empty(), false);
+    assert!(!table.is_empty());
     assert_eq!(table.len(), 4);
     assert_eq!(table.get_peer(0xAAAA1111), None); // Evicted
     assert_eq!(table.get_peer(0xEEEE5555).unwrap().node_id, 0xEEEE5555);

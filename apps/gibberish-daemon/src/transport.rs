@@ -26,7 +26,7 @@ impl SerialTransport {
         let port = serialport::new(port_path, 115_200)
             .timeout(Duration::from_millis(100))
             .open()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
 
         Ok(Self {
             port,

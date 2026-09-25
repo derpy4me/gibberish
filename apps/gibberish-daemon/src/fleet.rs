@@ -26,10 +26,9 @@ pub fn parse_telemetry_line(line: &str) -> Option<NodeTelemetry> {
     // Locate telemetry marker: either "[Telemetry RX]" or "Telemetry from:"
     let content = if let Some(pos) = line.find("[Telemetry RX]") {
         &line[pos + "[Telemetry RX]".len()..]
-    } else if let Some(pos) = line.find("Telemetry from:") {
-        &line[pos + "Telemetry from:".len()..]
     } else {
-        return None;
+        let pos = line.find("Telemetry from:")?;
+        &line[pos + "Telemetry from:".len()..]
     };
 
     let mut node_id = String::new();

@@ -26,7 +26,7 @@ fn main() {
     let msg_id = 9901;
     let ratchet_counter = 1;
 
-    let total_chunks = ((raw_bytes.len() + PLAINTEXT_CHUNK_LEN - 1) / PLAINTEXT_CHUNK_LEN) as u8;
+    let total_chunks = (raw_bytes.len().div_ceil(PLAINTEXT_CHUNK_LEN)) as u8;
     let mut sent_packets = Vec::new();
 
     for chunk_idx in 0..total_chunks {

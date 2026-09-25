@@ -1,0 +1,138 @@
+export component VerificationModal inherits Rectangle {
+    in property <string> node_id: "";
+    in property <string> alias: "";
+    in property <string> sas_words: "";
+    in property <image> qr_code;
+    callback confirm_verification(string);
+    callback close_modal();
+
+    background: #000000bb;
+
+    TouchArea {
+        // Intercept background clicks
+    }
+
+    Rectangle {
+        width: 360px;
+        height: 440px;
+        background: #0f172a;
+        border-width: 2px;
+        border-color: #38bdf8;
+        border-radius: 6px;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+            alignment: space-between;
+
+            Text {
+                text: "--- IDENTITY VERIFICATION ---";
+                color: #38bdf8;
+                font-size: 13px;
+                font-weight: 700;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: alias != "" ? ("Station: " + alias + " (" + node_id + ")") : ("Station: " + node_id);
+                color: #e2e8f0;
+                font-size: 11px;
+                horizontal-alignment: center;
+            }
+
+            // QR Code frame
+            Rectangle {
+                width: 160px;
+                height: 160px;
+                background: #ffffff;
+                border-radius: 4px;
+
+                Image {
+                    source: qr_code;
+                    width: 150px;
+                    height: 150px;
+                    image-fit: contain;
+                }
+            }
+
+            // SAS 4-word box
+            Rectangle {
+                height: 48px;
+                background: #1e293b;
+                border-radius: 4px;
+                border-width: 1px;
+                border-color: #f59e0b;
+
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: "SHORT AUTHENTICATION STRING (SAS)";
+                        color: #f59e0b;
+                        font-size: 9px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                    }
+                    Text {
+                        text: sas_words != "" ? sas_words : "computing...";
+                        color: #f8fafc;
+                        font-size: 14px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+
+            Text {
+                text: "Compare words verbally with peer or scan QR.\nIf words differ, do NOT confirm (impersonation risk).";
+                color: #94a3b8;
+                font-size: 10px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            // Action buttons
+            HorizontalLayout {
+                spacing: 10px;
+                height: 36px;
+
+                Rectangle {
+                    background: #334155;
+                    border-radius: 4px;
+                    horizontal-stretch: 1;
+
+                    TouchArea {
+                        clicked => { root.close_modal(); }
+                    }
+
+                    Text {
+                        text: "CANCEL";
+                        color: #f8fafc;
+                        font-size: 11px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle {
+                    background: #16a34a;
+                    border-radius: 4px;
+                    horizontal-stretch: 1;
+
+                    TouchArea {
+                        clicked => { root.confirm_verification(root.node_id); }
+                    }
+
+                    Text {
+                        text: "CONFIRM MATCH";
+                        color: #ffffff;
+                        font-size: 11px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}
