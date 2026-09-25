@@ -39,6 +39,7 @@ fn test_contact_crud_and_trust_transition() {
     // List
     let contacts = store.list_contacts().expect("list failed");
     assert_eq!(contacts.len(), 1);
+    assert_eq!(contacts[0].pubkey, pubkey);
 
     // Transition to Verified
     let changed = store
@@ -91,9 +92,10 @@ fn test_message_persistence_and_pagination() {
     assert_eq!(page2[4].id, "msg-10");
 
     // Update message status
-    store
+    let updated = store
         .update_message_status("msg-1", MessageStatus::Delivered)
         .expect("update status failed");
+    assert!(updated);
     let fetched = store.get_message("msg-1").unwrap().unwrap();
     assert_eq!(fetched.status, MessageStatus::Delivered);
 }
