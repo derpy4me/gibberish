@@ -5,7 +5,7 @@ use gibberish_crypto::ratchet::{decrypt_chunk, derive_sender_subkey, encrypt_chu
 use gibberish_crypto::secrecy::Secret;
 use gibberish_protocol::{
     MeshHeader, MeshPacket, SackPayload, CIPHERTEXT_LEN, FLAG_ACK_REQ, FLAG_CLIPBOARD,
-    FLAG_DIRECT, FLAG_GROUP, FLAG_SACK, PLAINTEXT_CHUNK_LEN,
+    FLAG_DIRECT, FLAG_SACK, PLAINTEXT_CHUNK_LEN,
 };
 use std::collections::HashMap;
 use std::time::{Duration, Instant};

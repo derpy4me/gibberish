@@ -47,7 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse CLI arguments
     let mut specified_ports: Vec<String> = Vec::new();
     let mut log_path = "/tmp/gibberish/daemon.log".to_string();
-    let mut local_node_id: u32 = 0xBEBCE5B8; // Default Node A fallback
+    let mut local_node_id: u32 = 0; // Populated from hardware auto-discovery
     let mut user_specified_node_id = false;
     let mut auto_sync = true;
     let mut push_message: Option<String> = None;
@@ -248,7 +248,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let primary_port = transports.first().map(|(p, _)| p.clone());
     let mut local_dongle_ids = std::collections::HashSet::new();
-    if local_node_id != 0 {
+    if user_specified_node_id && local_node_id != 0 {
         local_dongle_ids.insert(local_node_id);
     }
 
