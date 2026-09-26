@@ -3,16 +3,16 @@
 default:
     @just --list
 
-# Start desktop daemon (auto-logs to /tmp/gibberish/daemon.log and stdout)
-daemon port="/dev/ttyACM0" log="/tmp/gibberish/daemon.log":
+# Start desktop daemon (auto-detects serial dongle if port not specified)
+daemon port="" log="/tmp/gibberish/daemon.log":
     @mkdir -p /tmp/gibberish
-    cargo run --release -p gibberish-daemon -- --port {{port}} --log-file {{log}}
+    cargo run --release -p gibberish-daemon -- {{ if port != "" { "--port " + port } else { "" } }} --log-file {{log}}
 
 # Start daemon in background and follow logs
-daemon-bg port="/dev/ttyACM0" log="/tmp/gibberish/daemon.log":
+daemon-bg port="" log="/tmp/gibberish/daemon.log":
     @mkdir -p /tmp/gibberish
     @pkill -f gibberish-daemon 2>/dev/null || true
-    cargo run --release -p gibberish-daemon -- --port {{port}} --log-file {{log}} > /dev/null 2>&1 &
+    cargo run --release -p gibberish-daemon -- {{ if port != "" { "--port " + port } else { "" } }} --log-file {{log}} > /dev/null 2>&1 &
     @echo "gibberishd launched in background (logging to {{log}})"
     @sleep 1
     tail -f {{log}}
@@ -27,9 +27,9 @@ logs log="/tmp/gibberish/daemon.log":
     @touch {{log}}
     tail -f {{log}}
 
-# Flash firmware to C5 dongle (usage: just flash /dev/ttyACM0)
-flash port="/dev/ttyACM0":
-    cd apps/gibberish-firmware && espflash flash --port {{port}} --release
+# Flash firmware to C5 dongle (auto-detects port if not specified)
+flash port="":
+    cd apps/gibberish-firmware && espflash flash {{ if port != "" { "--port " + port } else { "" } }} --release
 
 # Build firmware with debug telemetry profile (5s unencrypted beacon)
 build-debug:
@@ -43,17 +43,17 @@ build-prod:
 
 build-firmware-prod: build-prod
 
-# Flash debug firmware to C5 dongle (usage: just flash-debug /dev/ttyACM0)
-flash-debug port="/dev/ttyACM0":
-    cd apps/gibberish-firmware && espflash flash --port {{port}} --release --features debug-telemetry
+# Flash debug firmware to C5 dongle (auto-detects port if not specified)
+flash-debug port="":
+    cd apps/gibberish-firmware && espflash flash {{ if port != "" { "--port " + port } else { "" } }} --release --features debug-telemetry
 
-flash-firmware-debug port="/dev/ttyACM0": (flash-debug port)
+flash-firmware-debug port="": (flash-debug port)
 
-# Flash production firmware to C5 dongle (usage: just flash-prod /dev/ttyACM0)
-flash-prod port="/dev/ttyACM0":
-    cd apps/gibberish-firmware && espflash flash --port {{port}} --release --no-default-features --features prod
+# Flash production firmware to C5 dongle (auto-detects port if not specified)
+flash-prod port="":
+    cd apps/gibberish-firmware && espflash flash {{ if port != "" { "--port " + port } else { "" } }} --release --no-default-features --features prod
 
-flash-firmware-prod port="/dev/ttyACM0": (flash-prod port)
+flash-firmware-prod port="": (flash-prod port)
 
 # Run central companion fleet sink
 sink:

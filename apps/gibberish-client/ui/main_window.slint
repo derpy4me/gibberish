@@ -19,6 +19,11 @@ export component MainWindow inherits Window {
     in property <string> active_alias: "Swarm Broadcast";
     in property <string> active_trust_state: "verified";
 
+    // Station & Storage properties
+    in property <string> local_node_id: "0xBEBD82B4";
+    in property <string> storage_mode: "SD ACTIVE";
+    in property <string> storage_stats: "SRAM: 40/256 KB";
+
     // Telemetry footer properties
     in property <int> tx_packets: 0;
     in property <int> rx_packets: 0;
@@ -54,6 +59,9 @@ export component MainWindow inherits Window {
             StationRoster {
                 stations: root.stations;
                 active_convo_id: root.active_convo_id;
+                local_node_id: root.local_node_id;
+                storage_mode: root.storage_mode;
+                storage_stats: root.storage_stats;
                 station_selected(id) => {
                     root.select_conversation(id);
                 }
@@ -94,8 +102,16 @@ export component MainWindow inherits Window {
                     alignment: start;
 
                     Text {
-                        text: "TX: " + root.tx_packets + " | RX: " + root.rx_packets;
+                        text: "NODE: " + root.local_node_id + " (" + root.storage_mode + ")";
                         color: #38bdf8;
+                        font-size: 10px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: "TX: " + root.tx_packets + " | RX: " + root.rx_packets;
+                        color: #94a3b8;
                         font-size: 10px;
                         font-weight: 700;
                         vertical-alignment: center;

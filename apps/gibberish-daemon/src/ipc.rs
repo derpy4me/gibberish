@@ -7,7 +7,8 @@ use gibberish_db::{
 };
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
@@ -17,6 +18,14 @@ use tokio_tungstenite::tungstenite::Message;
 pub const IPC_PORT: u16 = 4483;
 
 static MSG_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutboundMeshMessage {
+    pub convo_id: String,
+    pub dest_node_id: Option<u32>,
+    pub text: String,
+    pub message_id: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
@@ -56,6 +65,10 @@ pub struct IpcServer {
     addr: SocketAddr,
     db: DatabaseStore,
     broadcast_tx: broadcast::Sender<String>,
+    outbound_tx: tokio::sync::mpsc::UnboundedSender<OutboundMeshMessage>,
+    local_node_id: Arc<AtomicU32>,
+    storage_mode: Arc<RwLock<String>>,
+    dongle_attached: Arc<AtomicBool>,
 }
 
 impl Default for IpcServer {
@@ -66,24 +79,54 @@ impl Default for IpcServer {
 
 impl IpcServer {
     pub fn new() -> Self {
+        let (server, _) = Self::channel();
+        server
+    }
+
+    pub fn channel() -> (Self, tokio::sync::mpsc::UnboundedReceiver<OutboundMeshMessage>) {
         let db = DatabaseStore::open("/tmp/gibberish/store.db")
             .unwrap_or_else(|_| DatabaseStore::open_in_memory().expect("open memory db"));
         let (broadcast_tx, _) = broadcast::channel(512);
+        let (outbound_tx, outbound_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        Self {
+        let server = Self {
             addr: SocketAddr::from(([127, 0, 0, 1], IPC_PORT)),
             db,
             broadcast_tx,
-        }
+            outbound_tx,
+            local_node_id: Arc::new(AtomicU32::new(0)),
+            storage_mode: Arc::new(RwLock::new("RAM_ONLY".to_string())),
+            dongle_attached: Arc::new(AtomicBool::new(true)),
+        };
+        (server, outbound_rx)
     }
 
     pub fn with_db(addr: SocketAddr, db: DatabaseStore) -> Self {
         let (broadcast_tx, _) = broadcast::channel(512);
+        let (outbound_tx, _) = tokio::sync::mpsc::unbounded_channel();
         Self {
             addr,
             db,
             broadcast_tx,
+            outbound_tx,
+            local_node_id: Arc::new(AtomicU32::new(0)),
+            storage_mode: Arc::new(RwLock::new("RAM_ONLY".to_string())),
+            dongle_attached: Arc::new(AtomicBool::new(true)),
         }
+    }
+
+    pub fn set_local_node_id(&self, id: u32) {
+        self.local_node_id.store(id, Ordering::Relaxed);
+    }
+
+    pub fn set_storage_mode(&self, mode: &str) {
+        if let Ok(mut g) = self.storage_mode.write() {
+            *g = mode.to_string();
+        }
+    }
+
+    pub fn set_dongle_attached(&self, attached: bool) {
+        self.dongle_attached.store(attached, Ordering::Relaxed);
     }
 
     pub fn broadcaster(&self) -> broadcast::Sender<String> {
@@ -107,6 +150,7 @@ impl IpcServer {
 
     pub fn notify_rx_message(
         &self,
+        id: &str,
         convo_id: &str,
         sender_node_id: u32,
         text: &str,
@@ -116,6 +160,7 @@ impl IpcServer {
         self.broadcast_event(
             "rx_message",
             serde_json::json!({
+                "id": id,
                 "convo_id": convo_id,
                 "sender_node_id": sender_node_id,
                 "text": text,
@@ -224,17 +269,34 @@ async fn handle_connection(stream: TcpStream, server: IpcServer) {
 
 fn handle_rpc(server: &IpcServer, req: JsonRpcRequest) -> JsonRpcResponse {
     match req.method.as_str() {
-        "status" => JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id: req.id,
-            result: Some(serde_json::json!({
-                "status": "connected",
-                "dongle_attached": true,
-                "dongle_mode": "RAM_ONLY",
-                "mesh_active": true
-            })),
-            error: None,
-        },
+        "status" => {
+            let node_id = server.local_node_id.load(Ordering::Relaxed);
+            let mode = server
+                .storage_mode
+                .read()
+                .map(|m| m.clone())
+                .unwrap_or_else(|_| "RAM_ONLY".to_string());
+            let attached = server.dongle_attached.load(Ordering::Relaxed);
+            let node_hex = if node_id != 0 {
+                format!("0x{:08X}", node_id)
+            } else {
+                "UNKNOWN".to_string()
+            };
+            JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id: req.id,
+                result: Some(serde_json::json!({
+                    "status": "connected",
+                    "dongle_attached": attached,
+                    "dongle_mode": mode,
+                    "storage_mode": mode,
+                    "local_node_id": node_hex,
+                    "node_id": node_hex,
+                    "mesh_active": true
+                })),
+                error: None,
+            }
+        }
         "version" => JsonRpcResponse {
             jsonrpc: "2.0".to_string(),
             id: req.id,
@@ -286,7 +348,7 @@ fn handle_rpc(server: &IpcServer, req: JsonRpcRequest) -> JsonRpcResponse {
             let outbox_rec = OutboxRecord {
                 id: msg_id.clone(),
                 dest_node_id,
-                payload: text.into_bytes(),
+                payload: text.clone().into_bytes(),
                 queued_at: now,
                 retry_count: 0,
                 ttl_secs: 48 * 3600,
@@ -294,7 +356,15 @@ fn handle_rpc(server: &IpcServer, req: JsonRpcRequest) -> JsonRpcResponse {
             };
             let _ = server.db.insert_outbox(&outbox_rec);
 
-            server.notify_rx_message(&convo_id, 0, &msg_rec.text, now, "[Q]");
+            // Forward to physical RF transport pipeline
+            let _ = server.outbound_tx.send(OutboundMeshMessage {
+                convo_id: convo_id.clone(),
+                dest_node_id: Some(dest_node_id),
+                text: text.clone(),
+                message_id: msg_id.clone(),
+            });
+
+            server.notify_rx_message(&msg_id, &convo_id, 0, &msg_rec.text, now, "[Q]");
 
             JsonRpcResponse {
                 jsonrpc: "2.0".to_string(),
@@ -330,7 +400,15 @@ fn handle_rpc(server: &IpcServer, req: JsonRpcRequest) -> JsonRpcResponse {
             };
             let _ = server.db.insert_message(&msg_rec);
 
-            server.notify_rx_message("#all", 0, &text, now, "*");
+            // Forward to physical RF transport pipeline
+            let _ = server.outbound_tx.send(OutboundMeshMessage {
+                convo_id: "#all".to_string(),
+                dest_node_id: None,
+                text: text.clone(),
+                message_id: msg_id.clone(),
+            });
+
+            server.notify_rx_message(&msg_id, "#all", 0, &text, now, "*");
 
             JsonRpcResponse {
                 jsonrpc: "2.0".to_string(),

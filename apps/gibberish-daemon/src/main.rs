@@ -4,6 +4,7 @@ use gibberish_crypto::ratchet::derive_network_tag;
 use gibberish_crypto::secrecy::Secret;
 use gibberish_daemon::chunk::ChunkEngine;
 use gibberish_daemon::clipboard::ClipboardManager;
+use gibberish_daemon::fleet;
 use gibberish_daemon::ipc::IpcServer;
 use gibberish_daemon::nonce::NonceManager;
 use gibberish_daemon::transport::{self, parse_dongle_node_id, SerialTransport};
@@ -57,10 +58,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if arg == "--port" || arg == "-p" {
             if let Some(p) = args.next() {
                 for port in p.split(',') {
-                    let trimmed = port.trim();
+                    let mut trimmed = port.trim();
+                    if let Some(stripped) = trimmed.strip_prefix("port=") {
+                        trimmed = stripped;
+                    }
+                    if let Some(stripped) = trimmed.strip_prefix("--port=") {
+                        trimmed = stripped;
+                    }
                     if !trimmed.is_empty() {
                         specified_ports.push(trimmed.to_string());
                     }
+                }
+            }
+        } else if let Some(p) = arg.strip_prefix("--port=") {
+            for port in p.split(',') {
+                let mut trimmed = port.trim();
+                if let Some(stripped) = trimmed.strip_prefix("port=") {
+                    trimmed = stripped;
+                }
+                if !trimmed.is_empty() {
+                    specified_ports.push(trimmed.to_string());
                 }
             }
         } else if arg == "--log-file" || arg == "-l" {
@@ -210,9 +227,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Spawn WebSocket IPC Server on 127.0.0.1:4483
-    let ipc = IpcServer::new();
+    let (ipc, mut outbound_rx) = IpcServer::channel();
+    ipc.set_local_node_id(local_node_id);
+    ipc.set_dongle_attached(!transports.is_empty());
+    let ipc_server = ipc.clone();
     tokio::spawn(async move {
-        if let Err(e) = ipc.run().await {
+        if let Err(e) = ipc_server.run().await {
             eprintln!("IPC Server error: {}", e);
         }
     });
@@ -226,6 +246,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         log.log("OS clipboard auto-synchronization disabled (--no-sync).\n");
     }
 
+    let primary_port = transports.first().map(|(p, _)| p.clone());
+    let mut local_dongle_ids = std::collections::HashSet::new();
+    if local_node_id != 0 {
+        local_dongle_ids.insert(local_node_id);
+    }
+
     // Main daemon synchronization loop
     loop {
         sleep(Duration::from_millis(50)).await;
@@ -233,19 +259,71 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // 1. Inbound processing: poll stream from all connected hardware dongles
         for (port, t) in &mut transports {
             let (packets, logs) = t.poll_stream();
+            let is_primary_dongle = primary_port.as_ref() == Some(port);
 
             for line in logs {
-                if !user_specified_node_id {
-                    if let Some(detected_id) = parse_dongle_node_id(&line) {
-                        if detected_id != local_node_id {
+                if let Some(detected_id) = parse_dongle_node_id(&line) {
+                    local_dongle_ids.insert(detected_id);
+                    if !user_specified_node_id
+                        && is_primary_dongle
+                        && detected_id != local_node_id
+                    {
+                        log.log(&format!(
+                            "[Auto-Discovery] Updated local Dongle Node ID from hardware: 0x{:08X}",
+                            detected_id
+                        ));
+                        local_node_id = detected_id;
+                        ipc.set_local_node_id(local_node_id);
+                    }
+                }
+
+                // Ingest telemetry beacon frames (R9, R10)
+                if let Some(telem) = fleet::parse_telemetry_line(&line) {
+                    let clean_id = telem.node_id.trim_start_matches("0x");
+                    if let Ok(peer_id) = u32::from_str_radix(clean_id, 16) {
+                        if peer_id == local_node_id {
+                            ipc.set_storage_mode(&telem.storage_mode);
+                            ipc.broadcast_event(
+                                "telemetry_update",
+                                serde_json::json!({
+                                    "node_id": format!("0x{:08X}", local_node_id),
+                                    "storage_mode": telem.storage_mode,
+                                    "rx_packets": telem.rx_count,
+                                    "tx_packets": telem.tx_count,
+                                    "lqi": telem.lqi,
+                                    "rssi": telem.rssi,
+                                }),
+                            );
+                        } else {
+                            let alias = format!("Station-{:04X}", peer_id & 0xFFFF);
+                            let now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs() as i64;
+                            let _ = ipc.db().upsert_contact(&gibberish_db::ContactRecord {
+                                node_id: peer_id,
+                                alias: alias.clone(),
+                                pubkey: [0u8; 32],
+                                trust_state: gibberish_db::TrustState::Unverified,
+                                last_seen: now,
+                                rssi: telem.rssi as i16,
+                                lqi: telem.lqi,
+                            });
+                            ipc.notify_node_discovered(
+                                peer_id,
+                                &alias,
+                                "unverified",
+                                telem.rssi as i16,
+                                telem.lqi,
+                            );
                             log.log(&format!(
-                                "[Auto-Discovery] Updated local Dongle Node ID from hardware: 0x{:08X}",
-                                detected_id
+                                "[Peer Discovered] Node 0x{:08X} (Storage: {}, LQI: {}, RSSI: {} dBm)",
+                                peer_id, telem.storage_mode, telem.lqi, telem.rssi
                             ));
-                            local_node_id = detected_id;
                         }
                     }
                 }
+
                 log.log(&format!("[Dongle {}] {}", port, line));
             }
 
@@ -275,11 +353,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &swarm_master_key,
                 ) {
                     Ok(Some(decrypted_text)) => {
+                        let text_str = decrypted_text.expose_secret().clone();
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64;
                         log.log(&format!(
                             "[Mesh RX Decrypted] Reassembled message from Peer Node 0x{:08X} ({} chars)",
                             wire_pkt.src_node_id,
-                            decrypted_text.expose_secret().len()
+                            text_str.len()
                         ));
+
+                        // Suppress over-the-air loopback echoes from local dongles attached to this host
+                        let is_self_echo = local_dongle_ids.contains(&wire_pkt.src_node_id)
+                            || (local_node_id != 0 && wire_pkt.src_node_id == local_node_id);
+                        if is_self_echo {
+                            log.log(&format!(
+                                "[Airwave Loopback Suppressed] Overheard own transmission from Node 0x{:08X}; skipping duplicate chat insertion",
+                                wire_pkt.src_node_id
+                            ));
+                            continue;
+                        }
+
+                        static RX_MSG_COUNTER: std::sync::atomic::AtomicU64 =
+                            std::sync::atomic::AtomicU64::new(1);
+                        let seq = RX_MSG_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let msg_id = format!("rx-{}-{}", now, seq);
+
+                        // Persist to database and push to UI via IPC
+                        let msg_rec = gibberish_db::MessageRecord {
+                            id: msg_id.clone(),
+                            convo_id: "#all".to_string(),
+                            sender_node_id: wire_pkt.src_node_id,
+                            timestamp: now,
+                            text: text_str.clone(),
+                            status: gibberish_db::MessageStatus::Delivered,
+                        };
+                        let _ = ipc.db().insert_message(&msg_rec);
+                        ipc.notify_rx_message(&msg_id, "#all", wire_pkt.src_node_id, &text_str, now, "[OK]");
 
                         if auto_sync {
                             if let Err(e) = clipboard_mgr.write_clipboard(&decrypted_text) {
@@ -302,7 +413,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // 2. Outbound processing: monitor OS clipboard for new local copies
+        // 2. Outbound processing: drain UI IPC messages from send_swarm / send_dm
+        while let Ok(outbound_msg) = outbound_rx.try_recv() {
+            log.log(&format!(
+                "[Outbound IPC] Transmitting chat message ({}) to RF mesh...",
+                outbound_msg.message_id
+            ));
+            let secret_msg = Secret::new(outbound_msg.text);
+            match ChunkEngine::fragment_and_encrypt(
+                &secret_msg,
+                swarm_tag,
+                local_node_id,
+                &swarm_master_key,
+                &mut nonce_mgr,
+            ) {
+                Ok(packets) => {
+                    chunk_engine.cache_outbound(&packets);
+                    if let Some((primary_port, t)) = transports.first_mut() {
+                        for pkt in &packets {
+                            if let Err(e) = t.send_packet(pkt) {
+                                log.log(&format!(
+                                    "Failed to transmit chunk over {}: {}",
+                                    primary_port, e
+                                ));
+                            }
+                            sleep(Duration::from_millis(20)).await;
+                        }
+                        log.log(&format!(
+                            "[Mesh TX] Successfully sent {} chunks for {} over {}",
+                            packets.len(),
+                            outbound_msg.message_id,
+                            primary_port
+                        ));
+                    } else {
+                        log.log(&format!(
+                            "Warning: No hardware dongle attached to transmit outbound message {}",
+                            outbound_msg.message_id
+                        ));
+                    }
+                }
+                Err(e) => {
+                    log.log(&format!("Encryption / Chunking error on outbound IPC: {:?}", e));
+                }
+            }
+        }
+
+        // 3. Outbound processing: monitor OS clipboard for new local copies
         if auto_sync {
             if let Some(text) = clipboard_mgr.read_clipboard() {
                 log.log(&format!(

@@ -124,6 +124,21 @@ impl DesktopIpcTransport {
         Ok(())
     }
 
+    pub fn get_status(&self) -> Result<(), &'static str> {
+        let id = self.req_counter.fetch_add(1, Ordering::Relaxed);
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id,
+            method: "status".to_string(),
+            params: None,
+        };
+        let json_str = serde_json::to_string(&req).map_err(|_| "Serialization error")?;
+        self.outbound_tx
+            .send(json_str)
+            .map_err(|_| "Transport channel closed")?;
+        Ok(())
+    }
+
     pub fn list_contacts(&self) -> Result<(), &'static str> {
         let id = self.req_counter.fetch_add(1, Ordering::Relaxed);
         let req = JsonRpcRequest {
@@ -170,6 +185,9 @@ impl DesktopIpcTransport {
                 Ok((ws_stream, _)) => {
                     log::info!("Connected to gibberishd WebSocket IPC");
                     let _ = self.ui_sender.send(UiEvent::TelemetryUpdated {
+                        node_id: "0xBEBD82B4".to_string(),
+                        storage_mode: "SD ACTIVE".to_string(),
+                        storage_stats: "SRAM: 40/256 KB".to_string(),
                         tx: 0,
                         rx: 0,
                         channel: 15,
@@ -177,7 +195,8 @@ impl DesktopIpcTransport {
                         status: "CONNECTED".to_string(),
                     });
 
-                    // Ingest known contacts on connect
+                    // Query live daemon status and contacts on connect
+                    let _ = self.get_status();
                     let _ = self.list_contacts();
 
                     let (mut ws_write, mut ws_read) = ws_stream.split();
@@ -206,6 +225,9 @@ impl DesktopIpcTransport {
 
                     log::warn!("Disconnected from gibberishd, reconnecting...");
                     let _ = self.ui_sender.send(UiEvent::TelemetryUpdated {
+                        node_id: "0xBEBD82B4".to_string(),
+                        storage_mode: "SD ACTIVE".to_string(),
+                        storage_stats: "SRAM: 40/256 KB".to_string(),
                         tx: 0,
                         rx: 0,
                         channel: 15,
@@ -252,9 +274,20 @@ impl DesktopIpcTransport {
                         .get("status")
                         .and_then(|v| v.as_str())
                         .unwrap_or("*");
+                    let notif_id = notif.params.get("id").and_then(|v| v.as_str());
+                    let item_id: slint::SharedString = match notif_id {
+                        Some(id_str) => id_str.into(),
+                        None => {
+                            static FALLBACK_COUNTER: std::sync::atomic::AtomicU64 =
+                                std::sync::atomic::AtomicU64::new(1);
+                            let c = FALLBACK_COUNTER
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            format!("m-{}-{}", ts, c).into()
+                        }
+                    };
 
                     let _ = self.ui_sender.send(UiEvent::MessageReceived(ChatMessageItem {
-                        id: format!("m-{}", ts).into(),
+                        id: item_id,
                         convo_id: convo.into(),
                         sender: if sender == 0 {
                             "Me".into()
@@ -318,15 +351,81 @@ impl DesktopIpcTransport {
                         status: status.to_string(),
                     });
                 }
+                "telemetry_update" => {
+                    let node_id = notif
+                        .params
+                        .get("node_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("0xBEBD82B4");
+                    let storage_mode = notif
+                        .params
+                        .get("storage_mode")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("SD ACTIVE");
+                    let tx = notif
+                        .params
+                        .get("tx_packets")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0) as i32;
+                    let rx = notif
+                        .params
+                        .get("rx_packets")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0) as i32;
+                    let lqi = notif
+                        .params
+                        .get("lqi")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(200) as i32;
+
+                    let _ = self.ui_sender.send(UiEvent::TelemetryUpdated {
+                        node_id: node_id.to_string(),
+                        storage_mode: storage_mode.to_string(),
+                        storage_stats: "SRAM: 40/256 KB".to_string(),
+                        tx,
+                        rx,
+                        channel: 15,
+                        avg_lqi: lqi,
+                        status: "CONNECTED".to_string(),
+                    });
+                }
                 _ => {}
             }
             return;
         }
 
-        // Try parsing as RPC response (e.g. list_contacts or list_messages result)
+        // Try parsing as RPC response (e.g. status, list_contacts or list_messages result)
         if let Ok(res) = serde_json::from_str::<JsonRpcResponse>(text) {
             if let Some(val) = res.result {
-                if let Some(arr) = val.as_array() {
+                if let Some(obj) = val.as_object() {
+                    // Check if it's status response
+                    if let Some(node_id_val) = obj.get("local_node_id").or_else(|| obj.get("node_id")) {
+                        let node_id = node_id_val.as_str().unwrap_or("0xBEBD82B4");
+                        let storage_mode = obj
+                            .get("storage_mode")
+                            .or_else(|| obj.get("dongle_mode"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("SD ACTIVE");
+                        let attached = obj
+                            .get("dongle_attached")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(true);
+                        let _ = self.ui_sender.send(UiEvent::TelemetryUpdated {
+                            node_id: node_id.to_string(),
+                            storage_mode: storage_mode.to_string(),
+                            storage_stats: "SRAM: 40/256 KB".to_string(),
+                            tx: 0,
+                            rx: 0,
+                            channel: 15,
+                            avg_lqi: 200,
+                            status: if attached {
+                                "CONNECTED".to_string()
+                            } else {
+                                "NO DONGLE".to_string()
+                            },
+                        });
+                    }
+                } else if let Some(arr) = val.as_array() {
                     for item in arr {
                         // Check if it's a ContactRecord
                         if let Some(node_id_val) = item.get("node_id") {

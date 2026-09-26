@@ -77,4 +77,8 @@ A delay-tolerant networking pattern where messages addressed to offline mesh sta
 ### Short Authentication String (SAS) Verification
 An out-of-band cryptographic verification pattern where peers mathematically derive a matching 4-word mnemonic or short numeric code from their respective public keys and compare them verbally or via QR code, proving contact authenticity and eliminating airwave impersonation without centralized certificate authorities.
 
+### Multi-Dongle Airwave Loopback Suppression
+A host-side loopback suppression discipline in multi-transceiver environments where a host companion daemon connected to multiple physical RF dongles tracks all local hardware station IDs, discarding over-the-air packet reflections transmitted by one local dongle and overheard by another before injecting them into the local database, IPC, or UI chat model.
+
+
 

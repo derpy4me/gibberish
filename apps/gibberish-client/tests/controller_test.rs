@@ -16,6 +16,9 @@ fn test_ui_event_channel_bounded_capacity() {
         let mut q = queue.lock().unwrap();
         for i in 0..UiEventSender::CAPACITY {
             q.push_back(UiEvent::TelemetryUpdated {
+                node_id: "0xBEBD82B4".to_string(),
+                storage_mode: "SD ACTIVE".to_string(),
+                storage_stats: "SRAM: 40/256 KB".to_string(),
                 tx: i as i32,
                 rx: 0,
                 channel: 15,
@@ -56,6 +59,9 @@ fn test_slint_controller_initialization_and_accessors() {
 
         // Send a telemetry event
         let res = sender.send(UiEvent::TelemetryUpdated {
+            node_id: "0xBEBD82B4".to_string(),
+            storage_mode: "SD ACTIVE".to_string(),
+            storage_stats: "SRAM: 40/256 KB".to_string(),
             tx: 10,
             rx: 20,
             channel: 15,

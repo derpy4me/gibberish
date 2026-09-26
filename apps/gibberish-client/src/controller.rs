@@ -33,6 +33,9 @@ pub enum UiEvent {
         status: String,
     },
     TelemetryUpdated {
+        node_id: String,
+        storage_mode: String,
+        storage_stats: String,
         tx: i32,
         rx: i32,
         channel: i32,
@@ -280,12 +283,18 @@ fn apply_event(
             }
         }
         UiEvent::TelemetryUpdated {
+            node_id,
+            storage_mode,
+            storage_stats,
             tx,
             rx,
             channel,
             avg_lqi,
             status,
         } => {
+            ui.set_local_node_id(node_id.as_str().into());
+            ui.set_storage_mode(storage_mode.as_str().into());
+            ui.set_storage_stats(storage_stats.as_str().into());
             ui.set_tx_packets(tx);
             ui.set_rx_packets(rx);
             ui.set_mesh_channel(channel);
