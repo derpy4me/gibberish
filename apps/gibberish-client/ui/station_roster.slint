@@ -8,6 +8,7 @@ export struct StationItem {
     trust_state: string, // "unverified", "verified"
     signal_bars: int,    // 1 to 4
     selected: bool,
+    unread_count: int,
 }
 
 component SignalMeter inherits Rectangle {
@@ -55,6 +56,7 @@ export component StationRoster inherits Rectangle {
     in property <string> local_node_id: "0xBEBD82B4";
     in property <string> storage_mode: "SD ACTIVE";
     in property <string> storage_stats: "SRAM: 40/256 KB";
+    in property <int> swarm_unread_count: 0;
     callback station_selected(string);
 
     width: 230px;
@@ -151,12 +153,24 @@ export component StationRoster inherits Rectangle {
                     vertical-alignment: center;
                 }
 
-                Text {
-                    text: "[SWARM]";
-                    color: #10b981;
-                    font-size: 9px;
-                    font-weight: 700;
-                    vertical-alignment: center;
+                HorizontalLayout {
+                    spacing: 6px;
+
+                    if root.swarm_unread_count > 0 : Text {
+                        text: root.swarm_unread_count > 99 ? "[99+]" : ("[" + root.swarm_unread_count + "]");
+                        color: #10b981;
+                        font-size: 10px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: "[SWARM]";
+                        color: #10b981;
+                        font-size: 9px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
                 }
             }
         }
@@ -188,21 +202,37 @@ export component StationRoster inherits Rectangle {
                     padding: 6px;
                     spacing: 2px;
 
-                    // Top Row: Alias and Trust Badge
+                    // Top Row: Alias, Unread Badge, and Trust Badge
                     HorizontalLayout {
                         alignment: space-between;
-                        Text {
-                            text: station.alias != "" ? station.alias : station.node_id;
-                            color: #f1f5f9;
-                            font-size: 11px;
-                            font-weight: 700;
-                            overflow: elide;
+                        HorizontalLayout {
+                            spacing: 6px;
+                            horizontal-stretch: 1;
+
+                            Text {
+                                text: station.alias != "" ? station.alias : station.node_id;
+                                color: #f1f5f9;
+                                font-size: 11px;
+                                font-weight: 700;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+
+                            if station.unread_count > 0 : Text {
+                                text: station.unread_count > 99 ? "[99+]" : ("[" + station.unread_count + "]");
+                                color: station.trust_state == "verified" ? #38bdf8 : #f59e0b;
+                                font-size: 10px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                            }
                         }
+
                         Text {
                             text: station.trust_state == "verified" ? "[✓ VERIFIED]" : "[? UNVERIFIED]";
                             color: station.trust_state == "verified" ? #10b981 : #f59e0b;
                             font-size: 9px;
                             font-weight: 700;
+                            vertical-alignment: center;
                         }
                     }
 

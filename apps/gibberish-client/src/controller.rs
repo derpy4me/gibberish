@@ -201,6 +201,7 @@ fn apply_event(
                     trust_state: trust_state.as_str().into(),
                     signal_bars: compute_signal_bars(&rssi),
                     selected: false,
+                    unread_count: 0,
                 });
             }
         }
@@ -246,8 +247,9 @@ fn apply_event(
                     list.push(msg.clone());
                 }
             }
+            let active_convo = ui.get_active_convo_id();
             // Display only if this message belongs to the active conversation thread
-            if ui.get_active_convo_id() == convo_id.as_str() {
+            if active_convo == convo_id.as_str() {
                 let mut exists = false;
                 for i in 0..messages_model.row_count() {
                     if let Some(m) = messages_model.row_data(i) {
@@ -264,6 +266,35 @@ fn apply_event(
                 }
                 if !exists {
                     messages_model.push(msg);
+                }
+            } else if !msg.is_outgoing {
+                // Inactive conversation incoming message -> increment unread count
+                if convo_id == "#all" {
+                    ui.set_swarm_unread_count(ui.get_swarm_unread_count() + 1);
+                } else {
+                    let mut found = false;
+                    for i in 0..stations_model.row_count() {
+                        if let Some(mut row) = stations_model.row_data(i) {
+                            if row.node_id == convo_id.as_str() {
+                                row.unread_count += 1;
+                                stations_model.set_row_data(i, row);
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                    if !found {
+                        stations_model.push(StationItem {
+                            node_id: convo_id.as_str().into(),
+                            alias: msg.sender.as_str().into(),
+                            rssi: "".into(),
+                            lqi: "".into(),
+                            trust_state: "unverified".into(),
+                            signal_bars: 1,
+                            selected: false,
+                            unread_count: 1,
+                        });
+                    }
                 }
             }
         }
@@ -387,6 +418,7 @@ impl SlintController {
                 if id_str == "#all" {
                     ui.set_active_alias("Swarm Broadcast".into());
                     ui.set_active_trust_state("verified".into());
+                    ui.set_swarm_unread_count(0);
                 } else {
                     for i in 0..stations_clone.row_count() {
                         if let Some(row) = stations_clone.row_data(i) {
@@ -399,10 +431,13 @@ impl SlintController {
                     }
                 }
 
-                // Update selected flag on roster
+                // Update selected flag and clear unread count for active conversation on roster
                 for i in 0..stations_clone.row_count() {
                     if let Some(mut row) = stations_clone.row_data(i) {
                         row.selected = row.node_id == id_str.as_str();
+                        if row.selected {
+                            row.unread_count = 0;
+                        }
                         stations_clone.set_row_data(i, row);
                     }
                 }
@@ -566,6 +601,10 @@ impl SlintController {
     }
 
     pub fn window(&self) -> &MainWindow {
+        &self.ui
+    }
+
+    pub fn ui(&self) -> &MainWindow {
         &self.ui
     }
 

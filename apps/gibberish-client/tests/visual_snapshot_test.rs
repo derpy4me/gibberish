@@ -22,6 +22,7 @@ fn test_render_all_ui_states_snapshots() -> Result<(), Box<dyn std::error::Error
             trust_state: SharedString::from("verified"),
             signal_bars: 4,
             selected: false,
+            unread_count: 0,
         },
         StationItem {
             node_id: SharedString::from("0xCAFE1234"),
@@ -31,6 +32,7 @@ fn test_render_all_ui_states_snapshots() -> Result<(), Box<dyn std::error::Error
             trust_state: SharedString::from("unverified"),
             signal_bars: 3,
             selected: false,
+            unread_count: 2,
         },
         StationItem {
             node_id: SharedString::from("0xDEADBEEF"),
@@ -40,6 +42,7 @@ fn test_render_all_ui_states_snapshots() -> Result<(), Box<dyn std::error::Error
             trust_state: SharedString::from("unverified"),
             signal_bars: 2,
             selected: false,
+            unread_count: 0,
         },
     ];
     let stations_model: ModelRc<StationItem> = Rc::new(VecModel::from(stations)).into();

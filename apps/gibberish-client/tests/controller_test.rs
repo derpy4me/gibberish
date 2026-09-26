@@ -144,3 +144,85 @@ async fn test_ipc_transport_client_methods_and_outbound() {
     assert!(transport.list_contacts().is_ok());
     assert!(transport.list_messages("#all", 50, 0).is_ok());
 }
+
+#[test]
+fn test_unread_counter_inactive_increment_and_active_suppression() {
+    if let Ok(controller) = SlintController::new() {
+        let sender = controller.event_sender();
+        let ui = controller.ui();
+
+        // 1. Initially active conversation is "#all"
+        assert_eq!(ui.get_active_convo_id(), "#all");
+        assert_eq!(ui.get_swarm_unread_count(), 0);
+
+        // 2. Incoming message for active conversation (#all) must NOT increment unread badge
+        let _ = sender.send(UiEvent::MessageReceived(ChatMessageItem {
+            id: "m-1".into(),
+            convo_id: "#all".into(),
+            sender: "Alpha".into(),
+            text: "Broadcast 1".into(),
+            timestamp: "12:00".into(),
+            status: "*".into(),
+            is_outgoing: false,
+            sender_color: slint::Color::from_argb_u8(255, 10, 185, 129),
+        }));
+        controller.process_pending_events();
+
+        assert_eq!(ui.get_swarm_unread_count(), 0);
+        assert_eq!(controller.messages_model().row_count(), 1);
+
+        // 3. Discover station Bravo (0x9C33)
+        let _ = sender.send(UiEvent::StationDiscovered {
+            node_id: "0x9C33".into(),
+            alias: "Bravo".into(),
+            rssi: "-70 dBm".into(),
+            lqi: "200".into(),
+            trust_state: "verified".into(),
+        });
+        controller.process_pending_events();
+        assert_eq!(controller.stations_model().row_count(), 1);
+        assert_eq!(controller.stations_model().row_data(0).unwrap().unread_count, 0);
+
+        // 4. Incoming direct message from Bravo while active conversation is #all -> increment Bravo unread
+        let _ = sender.send(UiEvent::MessageReceived(ChatMessageItem {
+            id: "m-2".into(),
+            convo_id: "0x9C33".into(),
+            sender: "Bravo".into(),
+            text: "Direct message 1".into(),
+            timestamp: "12:01".into(),
+            status: "[OK]".into(),
+            is_outgoing: false,
+            sender_color: slint::Color::from_argb_u8(255, 192, 132, 252),
+        }));
+        controller.process_pending_events();
+
+        assert_eq!(controller.stations_model().row_data(0).unwrap().unread_count, 1);
+        // Messages model must not contain Bravo's message because active is #all
+        assert_eq!(controller.messages_model().row_count(), 1);
+
+        // 5. Select Bravo conversation -> unread_count resets to 0
+        ui.invoke_select_conversation("0x9C33".into());
+        assert_eq!(ui.get_active_convo_id(), "0x9C33");
+        assert_eq!(controller.stations_model().row_data(0).unwrap().unread_count, 0);
+
+        // 6. Incoming message to #all while Bravo is active -> swarm_unread_count increments to 1
+        let _ = sender.send(UiEvent::MessageReceived(ChatMessageItem {
+            id: "m-3".into(),
+            convo_id: "#all".into(),
+            sender: "Alpha".into(),
+            text: "Broadcast 2".into(),
+            timestamp: "12:02".into(),
+            status: "*".into(),
+            is_outgoing: false,
+            sender_color: slint::Color::from_argb_u8(255, 10, 185, 129),
+        }));
+        controller.process_pending_events();
+
+        assert_eq!(ui.get_swarm_unread_count(), 1);
+
+        // 7. Select #all -> swarm_unread_count clears to 0
+        ui.invoke_select_conversation("#all".into());
+        assert_eq!(ui.get_active_convo_id(), "#all");
+        assert_eq!(ui.get_swarm_unread_count(), 0);
+    }
+}
