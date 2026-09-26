@@ -1,4 +1,4 @@
-import { ListView, LineEdit } from "std-widgets.slint";
+import { ListView } from "std-widgets.slint";
 
 export struct ChatMessageItem {
     id: string,
@@ -179,42 +179,81 @@ export component ChatView inherits Rectangle {
         }
 
         // Input Box Container
-        Rectangle {
-            height: 44px;
-            background: #111827;
+        input_container := Rectangle {
+            height: 42px;
+            background: #090d16;
             border-radius: 4px;
             border-width: 1px;
-            border-color: #1e293b;
+            border-color: input_box.has-focus ? #38bdf8 : #1e293b;
 
             HorizontalLayout {
-                padding-left: 8px;
-                padding-right: 8px;
+                padding-left: 10px;
+                padding-right: 6px;
+                padding-top: 4px;
+                padding-bottom: 4px;
                 spacing: 8px;
-                alignment: space-between;
 
-                input_box := LineEdit {
-                    placeholder-text: "Type a message... (Press Enter to send)";
-                    font-size: 12px;
+                // Input Field Wrapper
+                Rectangle {
                     horizontal-stretch: 1;
-                    accepted => {
-                        if (self.text != "") {
-                            root.send_message(self.text);
-                            self.text = "";
+                    clip: true;
+
+                    // Placeholder text
+                    if input_box.text == "" && !input_box.has-focus : Text {
+                        x: 0px;
+                        width: 100%;
+                        text: "Type a message... (Press Enter to send)";
+                        color: #64748b;
+                        font-size: 12px;
+                        font-family: "JetBrains Mono";
+                        horizontal-alignment: left;
+                        vertical-alignment: center;
+                    }
+
+                    input_box := TextInput {
+                        property <length> computed-x: 0px;
+
+                        x: min(0px, max(parent.width - self.width - self.text-cursor-width, self.computed-x));
+                        width: max(parent.width - self.text-cursor-width, self.preferred-width);
+                        height: 100%;
+                        color: #f1f5f9;
+                        font-size: 12px;
+                        font-family: "JetBrains Mono";
+                        single-line: true;
+                        horizontal-alignment: left;
+                        vertical-alignment: center;
+
+                        cursor-position-changed(pos) => {
+                            if pos.x + self.computed-x < 0px {
+                                self.computed-x = - pos.x;
+                            } else if pos.x + self.computed-x > parent.width - self.text-cursor-width {
+                                self.computed-x = parent.width - pos.x - self.text-cursor-width;
+                            }
+                        }
+
+                        accepted => {
+                            if (self.text != "") {
+                                root.send_message(self.text);
+                                self.text = "";
+                                self.computed-x = 0px;
+                            }
                         }
                     }
                 }
 
-                Rectangle {
-                    width: 90px;
+                // Send Button
+                send_btn := Rectangle {
+                    width: 88px;
                     height: 32px;
-                    background: #2563eb;
+                    background: send_touch.pressed ? #1d4ed8 : (send_touch.has-hover ? #3b82f6 : #2563eb);
                     border-radius: 3px;
 
-                    TouchArea {
+                    send_touch := TouchArea {
                         clicked => {
                             if (input_box.text != "") {
                                 root.send_message(input_box.text);
                                 input_box.text = "";
+                                input_box.computed-x = 0px;
                             }
                         }
                     }
@@ -224,6 +263,7 @@ export component ChatView inherits Rectangle {
                         color: #ffffff;
                         font-size: 11px;
                         font-weight: 700;
+                        font-family: "JetBrains Mono";
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
