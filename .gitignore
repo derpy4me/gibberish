@@ -23,3 +23,7 @@ mutants.out*
 .env.local
 .envrc
 /.gh/
+
+# Visual snapshot artifacts
+docs/screenshots/
+

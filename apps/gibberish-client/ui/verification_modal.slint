@@ -6,18 +6,18 @@ export component VerificationModal inherits Rectangle {
     callback confirm_verification(string);
     callback close_modal();
 
-    background: #000000bb;
+    background: #000000dd;
 
     TouchArea {
         // Intercept background clicks
     }
 
     Rectangle {
-        width: 360px;
-        height: 440px;
-        background: #0f172a;
-        border-width: 2px;
-        border-color: #38bdf8;
+        width: 380px;
+        height: 460px;
+        background: #0f1523;
+        border-width: 1px;
+        border-color: #475569;
         border-radius: 6px;
 
         VerticalLayout {
@@ -25,18 +25,21 @@ export component VerificationModal inherits Rectangle {
             spacing: 12px;
             alignment: space-between;
 
+            // Header
             Text {
-                text: "--- IDENTITY VERIFICATION ---";
+                text: ":: OUT-OF-BAND IDENTITY CEREMONY ::";
                 color: #38bdf8;
-                font-size: 13px;
+                font-size: 11px;
                 font-weight: 700;
+                letter-spacing: 0.5px;
                 horizontal-alignment: center;
             }
 
             Text {
-                text: alias != "" ? ("Station: " + alias + " (" + node_id + ")") : ("Station: " + node_id);
-                color: #e2e8f0;
-                font-size: 11px;
+                text: alias != "" ? ("Peer Station: " + alias + " (" + node_id + ")") : ("Peer Station: " + node_id);
+                color: #f1f5f9;
+                font-size: 12px;
+                font-weight: 600;
                 horizontal-alignment: center;
             }
 
@@ -57,19 +60,23 @@ export component VerificationModal inherits Rectangle {
 
             // SAS 4-word box
             Rectangle {
-                height: 48px;
-                background: #1e293b;
+                height: 52px;
+                background: #111827;
                 border-radius: 4px;
                 border-width: 1px;
                 border-color: #f59e0b;
 
                 VerticalLayout {
                     alignment: center;
+                    padding: 4px;
+                    spacing: 2px;
+
                     Text {
                         text: "SHORT AUTHENTICATION STRING (SAS)";
                         color: #f59e0b;
                         font-size: 9px;
                         font-weight: 700;
+                        letter-spacing: 0.5px;
                         horizontal-alignment: center;
                     }
                     Text {
@@ -77,27 +84,33 @@ export component VerificationModal inherits Rectangle {
                         color: #f8fafc;
                         font-size: 14px;
                         font-weight: 700;
+                        letter-spacing: 0.5px;
                         horizontal-alignment: center;
                     }
                 }
             }
 
+            // Security friction warning text
             Text {
-                text: "Compare words verbally with peer or scan QR.\nIf words differ, do NOT confirm (impersonation risk).";
-                color: #94a3b8;
+                text: "Compare 4 words out-of-band (verbally or QR).\nIf words differ, do NOT confirm (impersonation risk).";
+                color: #fde68a;
                 font-size: 10px;
+                font-weight: 500;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
 
-            // Action buttons
+            // Action buttons (Cancel is low-friction default, Confirm is high-friction deliberate)
             HorizontalLayout {
-                spacing: 10px;
+                spacing: 12px;
                 height: 36px;
 
+                // Cancel button (Safe default)
                 Rectangle {
-                    background: #334155;
+                    background: #1e293b;
                     border-radius: 4px;
+                    border-width: 1px;
+                    border-color: #334155;
                     horizontal-stretch: 1;
 
                     TouchArea {
@@ -105,8 +118,8 @@ export component VerificationModal inherits Rectangle {
                     }
 
                     Text {
-                        text: "CANCEL";
-                        color: #f8fafc;
+                        text: "[ CANCEL ]";
+                        color: #8b9ab0;
                         font-size: 11px;
                         font-weight: 700;
                         horizontal-alignment: center;
@@ -114,8 +127,9 @@ export component VerificationModal inherits Rectangle {
                     }
                 }
 
+                // Confirm Match button (Deliberate action)
                 Rectangle {
-                    background: #16a34a;
+                    background: #10b981;
                     border-radius: 4px;
                     horizontal-stretch: 1;
 
@@ -124,8 +138,8 @@ export component VerificationModal inherits Rectangle {
                     }
 
                     Text {
-                        text: "CONFIRM MATCH";
-                        color: #ffffff;
+                        text: "[ CONFIRM MATCH ]";
+                        color: #080b11;
                         font-size: 11px;
                         font-weight: 700;
                         horizontal-alignment: center;

@@ -185,6 +185,7 @@ fn apply_event(
                         updated.rssi = rssi.as_str().into();
                         updated.lqi = lqi.as_str().into();
                         updated.trust_state = trust_state.as_str().into();
+                        updated.signal_bars = compute_signal_bars(&rssi);
                         stations_model.set_row_data(i, updated);
                         found = true;
                         break;
@@ -198,6 +199,7 @@ fn apply_event(
                     rssi: rssi.as_str().into(),
                     lqi: lqi.as_str().into(),
                     trust_state: trust_state.as_str().into(),
+                    signal_bars: compute_signal_bars(&rssi),
                     selected: false,
                 });
             }
@@ -209,6 +211,7 @@ fn apply_event(
                         let mut updated = row;
                         updated.rssi = rssi.as_str().into();
                         updated.lqi = lqi.as_str().into();
+                        updated.signal_bars = compute_signal_bars(&rssi);
                         stations_model.set_row_data(i, updated);
                         break;
                     }
@@ -445,6 +448,7 @@ impl SlintController {
                 // In standalone or test mode without daemon, reflect message locally
                 if !sent_via_ipc {
                     let status = if convo == "#all" { "*" } else { "[Q]" };
+                    let is_outgoing = true;
                     let _ = sender_for_chat.send(UiEvent::MessageReceived(ChatMessageItem {
                         id: format!("local-{}", now).into(),
                         convo_id: convo.into(),
@@ -452,7 +456,8 @@ impl SlintController {
                         text: txt,
                         timestamp: format!("{:02}:{:02}:{:02}", (now % 86400) / 3600, (now % 3600) / 60, now % 60).into(),
                         status: status.into(),
-                        is_outgoing: true,
+                        is_outgoing,
+                        sender_color: derive_sender_color("Me", is_outgoing),
                     }));
                 }
             }
@@ -586,3 +591,46 @@ impl SlintController {
         self.ui.run()
     }
 }
+
+/// Derives a deterministic color from the 5-color peer palette:
+/// 1. #a3e635 (Chartreuse / Tactical Lime)
+/// 2. #818cf8 (Indigo)
+/// 3. #c084fc (Purple)
+/// 4. #e879f9 (Fuchsia)
+/// 5. #f472b6 (Rose Pink)
+/// If outgoing (<Me>), returns Cyan #38bdf8.
+pub fn derive_sender_color(sender: &str, is_outgoing: bool) -> slint::Color {
+    if is_outgoing {
+        slint::Color::from_argb_u8(255, 0x38, 0xbd, 0xf8)
+    } else {
+        let mut h: u32 = 0;
+        for b in sender.bytes() {
+            h = h.wrapping_mul(31).wrapping_add(b as u32);
+        }
+        match h % 5 {
+            0 => slint::Color::from_argb_u8(255, 0xa3, 0xe6, 0x35),
+            1 => slint::Color::from_argb_u8(255, 0x81, 0x8c, 0xf8),
+            2 => slint::Color::from_argb_u8(255, 0xc0, 0x84, 0xfc),
+            3 => slint::Color::from_argb_u8(255, 0xe8, 0x79, 0xf9),
+            _ => slint::Color::from_argb_u8(255, 0xf4, 0x72, 0xb6),
+        }
+    }
+}
+
+pub fn compute_signal_bars(rssi_str: &str) -> i32 {
+    let clean = rssi_str.replace("dBm", "").trim().to_string();
+    if let Ok(num) = clean.parse::<i32>() {
+        if num >= -70 {
+            4
+        } else if num >= -80 {
+            3
+        } else if num >= -90 {
+            2
+        } else {
+            1
+        }
+    } else {
+        3
+    }
+}
+

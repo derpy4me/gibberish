@@ -6,12 +6,12 @@ export { StationItem, ChatMessageItem }
 
 export component MainWindow inherits Window {
     title: "Gibberish Mesh Terminal";
-    preferred-width: 840px;
+    preferred-width: 860px;
     preferred-height: 560px;
     min-width: 640px;
     min-height: 480px;
     default-font-family: "JetBrains Mono, monospace";
-    background: #0b0f19;
+    background: #080b11;
 
     in property <[StationItem]> stations: [];
     in property <[ChatMessageItem]> messages: [];
@@ -49,7 +49,7 @@ export component MainWindow inherits Window {
         padding: 0px;
         spacing: 0px;
 
-        // Main split-pane: Station Roster on left (220px fixed), Chat on right
+        // Main split-pane: Station Roster on left (230px fixed), Chat on right
         HorizontalLayout {
             padding: 0px;
             spacing: 0px;
@@ -81,15 +81,15 @@ export component MainWindow inherits Window {
             }
         }
 
-        // Always-visible Diagnostic Telemetry Footer (24px height) (R4)
+        // Diagnostic Telemetry Footer (Tactical Obsidian)
         Rectangle {
             height: 1px;
             background: #1e293b;
         }
 
         Rectangle {
-            height: 24px;
-            background: #090d16;
+            height: 26px;
+            background: #080b11;
 
             HorizontalLayout {
                 padding-left: 12px;
@@ -98,11 +98,20 @@ export component MainWindow inherits Window {
                 alignment: space-between;
 
                 HorizontalLayout {
-                    spacing: 12px;
+                    spacing: 10px;
                     alignment: start;
 
                     Text {
-                        text: "NODE: " + root.local_node_id + " (" + root.storage_mode + ")";
+                        text: "STATION:";
+                        color: #8b9ab0;
+                        font-size: 9px;
+                        font-weight: 700;
+                        letter-spacing: 0.5px;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: root.local_node_id;
                         color: #38bdf8;
                         font-size: 10px;
                         font-weight: 700;
@@ -110,34 +119,55 @@ export component MainWindow inherits Window {
                     }
 
                     Text {
-                        text: "TX: " + root.tx_packets + " | RX: " + root.rx_packets;
-                        color: #94a3b8;
+                        text: "|";
+                        color: #334155;
                         font-size: 10px;
-                        font-weight: 700;
                         vertical-alignment: center;
                     }
 
                     Text {
                         text: "CH: " + root.mesh_channel + " (802.15.4)";
-                        color: #a855f7;
+                        color: #8b9ab0;
                         font-size: 10px;
                         vertical-alignment: center;
                     }
 
                     Text {
-                        text: "LQI: " + root.avg_lqi;
-                        color: #94a3b8;
+                        text: "|";
+                        color: #334155;
+                        font-size: 10px;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: "TX: " + root.tx_packets + " | RX: " + root.rx_packets;
+                        color: #8b9ab0;
                         font-size: 10px;
                         vertical-alignment: center;
                     }
                 }
 
                 HorizontalLayout {
+                    spacing: 10px;
                     alignment: end;
 
                     Text {
-                        text: "RADIO: " + root.dongle_status;
-                        color: root.dongle_status == "CONNECTED" ? #22c55e : #ef4444;
+                        text: "AVG LQI: " + root.avg_lqi;
+                        color: #8b9ab0;
+                        font-size: 10px;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: "|";
+                        color: #334155;
+                        font-size: 10px;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: root.dongle_status == "CONNECTED" ? "[● RADIO: CONNECTED]" : "[○ RADIO: DISCONNECTED]";
+                        color: root.dongle_status == "CONNECTED" ? #10b981 : #ef4444;
                         font-size: 10px;
                         font-weight: 700;
                         vertical-alignment: center;

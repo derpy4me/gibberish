@@ -8,6 +8,7 @@ export struct ChatMessageItem {
     timestamp: string,
     status: string, // "*", "[OK]", "[Q]", "[!]"
     is_outgoing: bool,
+    sender_color: color,
 }
 
 export component ChatView inherits Rectangle {
@@ -18,17 +19,19 @@ export component ChatView inherits Rectangle {
     callback send_message(string);
     callback open_verify(string);
 
-    background: #0f172a;
+    background: #0e1420;
 
     VerticalLayout {
         padding: 8px;
-        spacing: 6px;
+        spacing: 8px;
 
-        // Header
+        // Header Panel
         Rectangle {
-            height: 42px;
-            background: #1e293b;
+            height: 44px;
+            background: #111827;
             border-radius: 4px;
+            border-width: 1px;
+            border-color: #1e293b;
 
             HorizontalLayout {
                 padding-left: 12px;
@@ -37,28 +40,28 @@ export component ChatView inherits Rectangle {
                 alignment: space-between;
 
                 HorizontalLayout {
-                    spacing: 8px;
+                    spacing: 10px;
                     alignment: start;
 
                     Text {
                         text: active_convo_id == "#all" ? "#all (Swarm Broadcast)" : (active_alias != "" ? active_alias : active_convo_id);
-                        color: #f8fafc;
+                        color: #f1f5f9;
                         font-size: 13px;
                         font-weight: 700;
                         vertical-alignment: center;
                     }
 
                     if active_convo_id != "#all": Rectangle {
-                        width: trust_state == "verified" ? 80px : 150px;
-                        height: 22px;
-                        background: trust_state == "verified" ? #14532d : #78350f;
+                        width: trust_state == "verified" ? 100px : 160px;
+                        height: 24px;
+                        background: trust_state == "verified" ? #064e3b : #451a03;
                         border-radius: 3px;
                         border-width: 1px;
-                        border-color: trust_state == "verified" ? #22c55e : #f59e0b;
+                        border-color: trust_state == "verified" ? #10b981 : #f59e0b;
 
                         Text {
-                            text: trust_state == "verified" ? "[V] VERIFIED" : "[!] UNVERIFIED CONTACT";
-                            color: trust_state == "verified" ? #4ade80 : #fbbf24;
+                            text: trust_state == "verified" ? "[✓ VERIFIED]" : "[? UNVERIFIED CONTACT]";
+                            color: trust_state == "verified" ? #10b981 : #f59e0b;
                             font-size: 10px;
                             font-weight: 700;
                             horizontal-alignment: center;
@@ -68,8 +71,8 @@ export component ChatView inherits Rectangle {
                 }
 
                 if active_convo_id != "#all" && trust_state != "verified": Rectangle {
-                    width: 120px;
-                    height: 26px;
+                    width: 130px;
+                    height: 28px;
                     background: #f59e0b;
                     border-radius: 3px;
 
@@ -79,7 +82,7 @@ export component ChatView inherits Rectangle {
 
                     Text {
                         text: "VERIFY IDENTITY";
-                        color: #0f172a;
+                        color: #080b11;
                         font-size: 10px;
                         font-weight: 700;
                         horizontal-alignment: center;
@@ -89,112 +92,135 @@ export component ChatView inherits Rectangle {
             }
         }
 
-        // Warning banner for unverified direct chat (AE1)
+        // Caution Banner for Unverified Direct Chat
         if active_convo_id != "#all" && trust_state == "unverified": Rectangle {
             height: 28px;
-            background: #451a03;
+            background: #201205;
             border-radius: 3px;
             border-width: 1px;
-            border-color: #b45309;
+            border-color: #78350f;
 
             HorizontalLayout {
-                padding-left: 8px;
-                padding-right: 8px;
+                padding-left: 10px;
+                padding-right: 10px;
                 alignment: center;
 
                 Text {
-                    text: "CAUTION: Node identity unverified. Compare 4-word SAS string out-of-band.";
+                    text: "[!] CAUTION: Station identity unverified. Compare 4-word SAS string out-of-band.";
                     color: #fde68a;
                     font-size: 10px;
+                    font-weight: 600;
                     vertical-alignment: center;
                 }
             }
         }
 
-        // Messages list
+        // Messages List (Terminal Gutter-Rail Layout)
         ListView {
             for msg in messages: Rectangle {
                 min-height: 28px;
-                background: msg.is_outgoing ? #1e293b : #182234;
-                border-radius: 3px;
+                background: transparent;
 
                 HorizontalLayout {
-                    padding: 6px;
+                    padding-top: 3px;
+                    padding-bottom: 3px;
+                    padding-left: 2px;
+                    padding-right: 8px;
                     spacing: 8px;
 
+                    // Gutter-Rail: 2px Left Accent Strip
+                    Rectangle {
+                        width: 2px;
+                        background: msg.sender_color;
+                        border-radius: 1px;
+                    }
+
+                    // Gutter: Timestamp (WCAG AA compliant contrast)
                     Text {
                         text: "[" + msg.timestamp + "]";
-                        color: #64748b;
+                        color: #8b9ab0;
                         font-size: 11px;
+                        font-weight: 500;
+                        vertical-alignment: center;
                     }
 
+                    // Sender Alias with deterministic peer color
                     Text {
                         text: "<" + msg.sender + ">";
-                        color: msg.is_outgoing ? #38bdf8 : #4ade80;
+                        color: msg.sender_color;
                         font-size: 11px;
                         font-weight: 700;
+                        vertical-alignment: center;
                     }
 
+                    // Message Body Text (Crisp High Contrast)
                     Text {
                         text: msg.text;
-                        color: #e2e8f0;
-                        font-size: 11px;
+                        color: #f1f5f9;
+                        font-size: 12px;
+                        font-weight: 500;
                         horizontal-stretch: 1;
                         wrap: word-wrap;
+                        vertical-alignment: center;
                     }
 
+                    // Delivery Status Rail
                     if msg.status != "": Text {
                         text: msg.status;
-                        color: msg.status == "[OK]" ? #4ade80 : (msg.status == "[!]" ? #ef4444 : #f59e0b);
+                        color: msg.status == "[OK]" ? #10b981 : (msg.status == "[!]" ? #ef4444 : #f59e0b);
                         font-size: 11px;
                         font-weight: 700;
+                        vertical-alignment: center;
                     }
                 }
             }
         }
 
-        // Input strip
+        // Input Box Container
         Rectangle {
-            height: 38px;
-            background: #1e293b;
-            border-radius: 3px;
+            height: 44px;
+            background: #111827;
+            border-radius: 4px;
             border-width: 1px;
-            border-color: #334155;
+            border-color: #1e293b;
 
             HorizontalLayout {
-                padding: 4px;
-                spacing: 6px;
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 10px;
+                alignment: space-between;
 
-                input := TextInput {
+                input_box := TextInput {
                     text: "";
-                    color: #f8fafc;
+                    color: #f1f5f9;
                     font-size: 12px;
-                    vertical-alignment: center;
                     horizontal-stretch: 1;
+                    vertical-alignment: center;
                     accepted => {
-                        if (input.text != "") {
-                            root.send_message(input.text);
-                            input.text = "";
+                        if (self.text != "") {
+                            root.send_message(self.text);
+                            self.text = "";
                         }
                     }
                 }
 
                 Rectangle {
-                    width: 70px;
+                    width: 90px;
+                    height: 28px;
                     background: #2563eb;
                     border-radius: 3px;
 
                     TouchArea {
                         clicked => {
-                            if (input.text != "") {
-                                root.send_message(input.text);
-                                input.text = "";
+                            if (input_box.text != "") {
+                                root.send_message(input_box.text);
+                                input_box.text = "";
                             }
                         }
                     }
 
                     Text {
-                        text: "SEND";
+                        text: "SEND [↵]";
                         color: #ffffff;
                         font-size: 11px;
                         font-weight: 700;

@@ -10,7 +10,7 @@ fn test_render_all_ui_states_snapshots() -> Result<(), Box<dyn std::error::Error
 
     let runtime = SnapshotRuntime::new()?;
     let ui = MainWindow::new()?;
-    runtime.set_size(ui.window(), (840, 560), 1.0)?;
+    runtime.set_size(ui.window(), (860, 560), 1.0)?;
 
     // 1. Populate mock station roster
     let stations = vec![
@@ -20,6 +20,7 @@ fn test_render_all_ui_states_snapshots() -> Result<(), Box<dyn std::error::Error
             rssi: SharedString::from("-64 dBm"),
             lqi: SharedString::from("210"),
             trust_state: SharedString::from("verified"),
+            signal_bars: 4,
             selected: false,
         },
         StationItem {
@@ -28,6 +29,7 @@ fn test_render_all_ui_states_snapshots() -> Result<(), Box<dyn std::error::Error
             rssi: SharedString::from("-78 dBm"),
             lqi: SharedString::from("165"),
             trust_state: SharedString::from("unverified"),
+            signal_bars: 3,
             selected: false,
         },
         StationItem {
@@ -36,6 +38,7 @@ fn test_render_all_ui_states_snapshots() -> Result<(), Box<dyn std::error::Error
             rssi: SharedString::from("-89 dBm"),
             lqi: SharedString::from("110"),
             trust_state: SharedString::from("unverified"),
+            signal_bars: 2,
             selected: false,
         },
     ];
@@ -47,29 +50,32 @@ fn test_render_all_ui_states_snapshots() -> Result<(), Box<dyn std::error::Error
         ChatMessageItem {
             id: SharedString::from("m1"),
             convo_id: SharedString::from("#all"),
-            sender: SharedString::from("<Station-Alpha>"),
+            sender: SharedString::from("Station-Alpha"),
             text: SharedString::from("All stations check in. RF noise floor clear on Channel 15."),
             timestamp: SharedString::from("18:14:02"),
             status: SharedString::from("[OK]"),
             is_outgoing: false,
+            sender_color: slint::Color::from_argb_u8(255, 129, 140, 248), // Indigo
         },
         ChatMessageItem {
             id: SharedString::from("m2"),
             convo_id: SharedString::from("#all"),
-            sender: SharedString::from("<Me>"),
+            sender: SharedString::from("Me"),
             text: SharedString::from("Copy Alpha. Monitoring airwaves from sector 4. Signal strength solid."),
             timestamp: SharedString::from("18:15:20"),
             status: SharedString::from("*"),
             is_outgoing: true,
+            sender_color: slint::Color::from_argb_u8(255, 56, 189, 248), // Cyan
         },
         ChatMessageItem {
             id: SharedString::from("m3"),
             convo_id: SharedString::from("#all"),
-            sender: SharedString::from("<Field-Recon-02>"),
+            sender: SharedString::from("Field-Recon-02"),
             text: SharedString::from("Overhearing telemetry beacon. Establishing line-of-sight link."),
             timestamp: SharedString::from("18:16:45"),
             status: SharedString::from("[OK]"),
             is_outgoing: false,
+            sender_color: slint::Color::from_argb_u8(255, 192, 132, 252), // Purple
         },
     ];
     let swarm_model: ModelRc<ChatMessageItem> = Rc::new(VecModel::from(swarm_messages)).into();
@@ -97,20 +103,22 @@ fn test_render_all_ui_states_snapshots() -> Result<(), Box<dyn std::error::Error
         ChatMessageItem {
             id: SharedString::from("dm1"),
             convo_id: SharedString::from("0xCAFE1234"),
-            sender: SharedString::from("<Field-Recon-02>"),
+            sender: SharedString::from("Field-Recon-02"),
             text: SharedString::from("Requesting tactical waypoint coordinates via direct link."),
             timestamp: SharedString::from("18:20:10"),
             status: SharedString::from("[OK]"),
             is_outgoing: false,
+            sender_color: slint::Color::from_argb_u8(255, 192, 132, 252), // Purple
         },
         ChatMessageItem {
             id: SharedString::from("dm2"),
             convo_id: SharedString::from("0xCAFE1234"),
-            sender: SharedString::from("<Me>"),
+            sender: SharedString::from("Me"),
             text: SharedString::from("Target coordinate grid: 45.281, -111.450. Awaiting SAS verification."),
             timestamp: SharedString::from("18:21:05"),
             status: SharedString::from("[Q]"),
             is_outgoing: true,
+            sender_color: slint::Color::from_argb_u8(255, 56, 189, 248), // Cyan
         },
     ];
     let dm_model: ModelRc<ChatMessageItem> = Rc::new(VecModel::from(dm_messages)).into();
@@ -128,7 +136,7 @@ fn test_render_all_ui_states_snapshots() -> Result<(), Box<dyn std::error::Error
     let frame3 = runtime.render(ui.window())?;
     frame3.write_png(&out_dir.join("03_verification_modal.png"))?;
 
-    // Render State 4: Compact / Mobile Viewport (420 x 680)
+    // Render State 4: Compact / Mobile Viewport (640 x 500)
     ui.set_show_verification_modal(false);
     runtime.set_size(ui.window(), (640, 500), 1.0)?;
     let frame4 = runtime.render(ui.window())?;

@@ -286,18 +286,22 @@ impl DesktopIpcTransport {
                         }
                     };
 
+                    let is_outgoing = sender == 0;
+                    let sender_name = if is_outgoing {
+                        "Me".to_string()
+                    } else {
+                        format!("0x{:08X}", sender)
+                    };
+
                     let _ = self.ui_sender.send(UiEvent::MessageReceived(ChatMessageItem {
                         id: item_id,
                         convo_id: convo.into(),
-                        sender: if sender == 0 {
-                            "Me".into()
-                        } else {
-                            format!("0x{:08X}", sender).into()
-                        },
+                        sender: sender_name.as_str().into(),
                         text: body.into(),
                         timestamp: format_ts(ts).into(),
                         status: status.into(),
-                        is_outgoing: sender == 0,
+                        is_outgoing,
+                        sender_color: crate::controller::derive_sender_color(&sender_name, is_outgoing),
                     }));
                 }
                 "node_discovered" => {
@@ -468,19 +472,23 @@ impl DesktopIpcTransport {
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("*");
 
+                            let is_outgoing = sender == 0;
+                            let sender_name = if is_outgoing {
+                                "Me".to_string()
+                            } else {
+                                format!("0x{:08X}", sender)
+                            };
+
                             let _ =
                                 self.ui_sender.send(UiEvent::MessageReceived(ChatMessageItem {
                                     id: id.into(),
                                     convo_id: convo.into(),
-                                    sender: if sender == 0 {
-                                        "Me".into()
-                                    } else {
-                                        format!("0x{:08X}", sender).into()
-                                    },
+                                    sender: sender_name.as_str().into(),
                                     text: body.into(),
                                     timestamp: format_ts(ts).into(),
                                     status: status.into(),
-                                    is_outgoing: sender == 0,
+                                    is_outgoing,
+                                    sender_color: crate::controller::derive_sender_color(&sender_name, is_outgoing),
                                 }));
                         }
                     }

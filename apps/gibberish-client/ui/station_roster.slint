@@ -6,7 +6,47 @@ export struct StationItem {
     rssi: string,
     lqi: string,
     trust_state: string, // "unverified", "verified"
+    signal_bars: int,    // 1 to 4
     selected: bool,
+}
+
+component SignalMeter inherits Rectangle {
+    in property <int> bars: 3;
+    width: 20px;
+    height: 14px;
+
+    Rectangle {
+        x: 0px;
+        y: 10px;
+        width: 3px;
+        height: 4px;
+        background: root.bars >= 1 ? #10b981 : #232f42;
+        border-radius: 1px;
+    }
+    Rectangle {
+        x: 5px;
+        y: 7px;
+        width: 3px;
+        height: 7px;
+        background: root.bars >= 2 ? #10b981 : #232f42;
+        border-radius: 1px;
+    }
+    Rectangle {
+        x: 10px;
+        y: 4px;
+        width: 3px;
+        height: 10px;
+        background: root.bars >= 3 ? #10b981 : #232f42;
+        border-radius: 1px;
+    }
+    Rectangle {
+        x: 15px;
+        y: 1px;
+        width: 3px;
+        height: 13px;
+        background: root.bars >= 4 ? #10b981 : #232f42;
+        border-radius: 1px;
+    }
 }
 
 export component StationRoster inherits Rectangle {
@@ -17,145 +57,185 @@ export component StationRoster inherits Rectangle {
     in property <string> storage_stats: "SRAM: 40/256 KB";
     callback station_selected(string);
 
-    width: 220px;
-    background: #090d16;
+    width: 230px;
+    background: #0b0f17;
     border-width: 1px;
     border-color: #1e293b;
 
     VerticalLayout {
         padding: 8px;
-        spacing: 6px;
+        spacing: 8px;
 
-        // Local Station / Hardware Node Status
+        // Local Station / Hardware Node Status Card
         Rectangle {
-            background: #0f172a;
+            background: #0f1523;
             border-radius: 4px;
             border-width: 1px;
-            border-color: #334155;
+            border-color: #1e293b;
 
             VerticalLayout {
-                padding: 6px;
-                spacing: 2px;
+                padding: 8px;
+                spacing: 4px;
+
+                HorizontalLayout {
+                    alignment: space-between;
+                    Text {
+                        text: "LOCAL STATION";
+                        font-size: 9px;
+                        font-weight: 700;
+                        letter-spacing: 0.5px;
+                        color: #8b9ab0;
+                    }
+                    Text {
+                        text: root.storage_mode == "SD ACTIVE" ? "[SD ACTIVE]" : "[SRAM]";
+                        font-size: 9px;
+                        font-weight: 700;
+                        color: root.storage_mode == "SD ACTIVE" ? #10b981 : #f59e0b;
+                    }
+                }
 
                 Text {
-                    text: "LOCAL NODE";
-                    font-size: 9px;
-                    font-weight: 700;
-                    color: #94a3b8;
-                }
-                Text {
                     text: root.local_node_id;
-                    font-size: 12px;
+                    font-size: 13px;
                     font-weight: 700;
                     color: #38bdf8;
                 }
-                HorizontalLayout {
-                    spacing: 6px;
-                    Text {
-                        text: root.storage_mode;
-                        font-size: 9px;
-                        font-weight: 700;
-                        color: root.storage_mode == "SD ACTIVE" ? #22c55e : #eab308;
-                    }
-                    Text {
-                        text: root.storage_stats;
-                        font-size: 9px;
-                        color: #64748b;
-                    }
+
+                Text {
+                    text: root.storage_stats;
+                    font-size: 9px;
+                    color: #8b9ab0;
                 }
             }
         }
 
+        // Section Divider
+        Rectangle {
+            height: 1px;
+            background: #1e293b;
+        }
+
+        // Channels Section Header
         Text {
-            text: "--- MESH NODES ---";
-            font-size: 11px;
+            text: "--- CHANNELS ---";
+            font-size: 10px;
             font-weight: 700;
-            color: #38bdf8;
+            letter-spacing: 1px;
+            color: #8b9ab0;
             horizontal-alignment: center;
         }
 
-        // Default Swarm Broadcast Channel
+        // Swarm Broadcast Channel Button
         Rectangle {
-            height: 38px;
-            background: active_convo_id == "#all" ? #1e293b : #0f172a;
-            border-radius: 3px;
-            border-width: active_convo_id == "#all" ? 1px : 0px;
-            border-color: #38bdf8;
+            height: 36px;
+            background: active_convo_id == "#all" ? #151d2a : #0e1420;
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: active_convo_id == "#all" ? #38bdf8 : #1e293b;
 
             TouchArea {
                 clicked => { root.station_selected("#all"); }
             }
 
             HorizontalLayout {
-                padding: 6px;
-                spacing: 6px;
-                alignment: center;
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 8px;
+                alignment: space-between;
 
                 Text {
-                    text: "#all (Swarm)";
-                    color: #4ade80;
+                    text: active_convo_id == "#all" ? ":: #all (Swarm) ::" : "#all (Swarm)";
+                    color: active_convo_id == "#all" ? #f1f5f9 : #8b9ab0;
                     font-size: 12px;
+                    font-weight: active_convo_id == "#all" ? 700 : 500;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "[SWARM]";
+                    color: #10b981;
+                    font-size: 9px;
                     font-weight: 700;
                     vertical-alignment: center;
                 }
             }
         }
 
+        // Airwave Stations Header
         Text {
-            text: "NEARBY STATIONS";
+            text: "--- AIRWAVE STATIONS ---";
             font-size: 10px;
-            color: #64748b;
+            font-weight: 700;
+            letter-spacing: 1px;
+            color: #8b9ab0;
+            horizontal-alignment: center;
         }
 
+        // Stations List
         ListView {
             for station in stations: Rectangle {
-                height: 52px;
-                background: station.selected ? #1e293b : #0f172a;
-                border-radius: 3px;
-                border-width: station.selected ? 1px : 0px;
-                border-color: station.trust_state == "verified" ? #22c55e : #f59e0b;
+                height: 56px;
+                background: station.selected ? #151d2a : #0e1420;
+                border-radius: 4px;
+                border-width: 1px;
+                border-color: station.selected ? #38bdf8 : #1e293b;
 
                 TouchArea {
                     clicked => { root.station_selected(station.node_id); }
                 }
 
                 VerticalLayout {
-                    padding: 4px;
+                    padding: 6px;
                     spacing: 2px;
 
+                    // Top Row: Alias and Trust Badge
                     HorizontalLayout {
+                        alignment: space-between;
                         Text {
                             text: station.alias != "" ? station.alias : station.node_id;
-                            color: station.trust_state == "verified" ? #22c55e : #f59e0b;
-                            font-size: 12px;
+                            color: #f1f5f9;
+                            font-size: 11px;
                             font-weight: 700;
                             overflow: elide;
                         }
                         Text {
-                            text: station.trust_state == "verified" ? "[V]" : "[?]";
-                            color: station.trust_state == "verified" ? #22c55e : #f59e0b;
-                            font-size: 10px;
-                            horizontal-alignment: right;
+                            text: station.trust_state == "verified" ? "[✓ VERIFIED]" : "[? UNVERIFIED]";
+                            color: station.trust_state == "verified" ? #10b981 : #f59e0b;
+                            font-size: 9px;
+                            font-weight: 700;
                         }
                     }
 
+                    // Middle Row: Hex Node ID
                     Text {
                         text: station.node_id;
-                        color: #64748b;
+                        color: #8b9ab0;
                         font-size: 10px;
                     }
 
+                    // Bottom Row: RSSI and LQI Telemetry + Graphical SignalMeter
                     HorizontalLayout {
-                        Text {
-                            text: station.rssi;
-                            color: #94a3b8;
-                            font-size: 9px;
+                        alignment: space-between;
+                        spacing: 6px;
+
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Text {
+                                text: station.rssi;
+                                color: #8b9ab0;
+                                font-size: 9px;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: station.lqi != "" ? ("LQI: " + station.lqi) : "";
+                                color: #8b9ab0;
+                                font-size: 9px;
+                                vertical-alignment: center;
+                            }
                         }
-                        Text {
-                            text: station.lqi;
-                            color: #94a3b8;
-                            font-size: 9px;
-                            horizontal-alignment: right;
+
+                        SignalMeter {
+                            bars: station.signal_bars;
                         }
                     }
                 }

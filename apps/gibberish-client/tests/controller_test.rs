@@ -98,6 +98,7 @@ fn test_conversation_message_isolation_and_switching() {
             timestamp: "12:00:00".into(),
             status: "*".into(),
             is_outgoing: false,
+            sender_color: slint::Color::from_argb_u8(255, 129, 140, 248),
         }));
 
         // Add message for Alice (0xBEBD82B4)
@@ -109,6 +110,7 @@ fn test_conversation_message_isolation_and_switching() {
             timestamp: "12:01:00".into(),
             status: "[OK]".into(),
             is_outgoing: false,
+            sender_color: slint::Color::from_argb_u8(255, 163, 230, 53),
         }));
 
         controller.process_pending_events();
