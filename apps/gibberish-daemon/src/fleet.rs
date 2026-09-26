@@ -20,6 +20,70 @@ pub struct NodeTelemetry {
     pub last_seen: Instant,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalDongleStatus {
+    pub node_id: u32,
+    pub uptime_secs: u32,
+    pub storage_mode: String,
+    pub storage_stats: String,
+    pub drop_count: u32,
+}
+
+/// Parses local hardware dongle diagnostic heartbeat line:
+/// e.g. "[Node BEBCE5B8] Uptime: 67924s | Storage: MicroSdActive | SRAM: 0/256 pkts | Drops: 0"
+pub fn parse_local_heartbeat_line(line: &str) -> Option<LocalDongleStatus> {
+    let node_start = line.find("[Node ")?;
+    let remainder = &line[node_start + "[Node ".len()..];
+    let node_end = remainder.find(']')?;
+    let node_hex = remainder[..node_end].trim();
+    let node_id = u32::from_str_radix(node_hex, 16).ok()?;
+
+    let mut uptime_secs = 0u32;
+    let mut storage_mode = "RAM ONLY".to_string();
+    let mut sram_str = "0/256 pkts".to_string();
+    let mut drop_count = 0u32;
+
+    for part in remainder[node_end + 1..].split('|') {
+        let trimmed = part.trim();
+        if let Some((k, v)) = trimmed.split_once(':') {
+            let key = k.trim();
+            let val = v.trim();
+            if key == "Uptime" {
+                let num_str = val.trim_end_matches('s').trim();
+                if let Ok(n) = num_str.parse::<u32>() {
+                    uptime_secs = n;
+                }
+            } else if key == "Storage" {
+                if val.contains("MicroSd") || val.contains("SD") || val.contains("Sd") {
+                    storage_mode = "SD ACTIVE".to_string();
+                } else {
+                    storage_mode = "RAM ONLY".to_string();
+                }
+            } else if key == "SRAM" {
+                sram_str = val.to_string();
+            } else if key == "Drops" {
+                if let Ok(n) = val.parse::<u32>() {
+                    drop_count = n;
+                }
+            }
+        }
+    }
+
+    let storage_stats = if storage_mode == "SD ACTIVE" {
+        format!("MicroSD Active | SRAM: {}", sram_str)
+    } else {
+        format!("RAM Only | SRAM: {}", sram_str)
+    };
+
+    Some(LocalDongleStatus {
+        node_id,
+        uptime_secs,
+        storage_mode,
+        storage_stats,
+        drop_count,
+    })
+}
+
 /// Parses a structured telemetry line emitted over CDC or wireless 802.15.4.
 /// Returns None if the line does not represent a valid telemetry frame.
 pub fn parse_telemetry_line(line: &str) -> Option<NodeTelemetry> {
@@ -322,5 +386,24 @@ mod tests {
         assert!(dashboard.contains("PROJECT GIBBERISH - 802.15.4 OFF-GRID FLEET SINK"));
 
         let _ = fs::remove_file(log_path);
+    }
+
+    #[test]
+    fn test_parse_local_heartbeat_line() {
+        let line_sd = "[Node BEBCE5B8] Uptime: 67924s | Storage: MicroSdActive | SRAM: 0/256 pkts | Drops: 0";
+        let status = parse_local_heartbeat_line(line_sd).expect("should parse SD heartbeat");
+        assert_eq!(status.node_id, 0xBEBCE5B8);
+        assert_eq!(status.uptime_secs, 67924);
+        assert_eq!(status.storage_mode, "SD ACTIVE");
+        assert_eq!(status.storage_stats, "MicroSD Active | SRAM: 0/256 pkts");
+        assert_eq!(status.drop_count, 0);
+
+        let line_ram = "[Dongle /dev/cu.usbmodem1101] [Node BEBD82B4] Uptime: 64371s | Storage: RamOnly | SRAM: 7/256 pkts | Drops: 12";
+        let status_ram = parse_local_heartbeat_line(line_ram).expect("should parse RAM heartbeat");
+        assert_eq!(status_ram.node_id, 0xBEBD82B4);
+        assert_eq!(status_ram.uptime_secs, 64371);
+        assert_eq!(status_ram.storage_mode, "RAM ONLY");
+        assert_eq!(status_ram.storage_stats, "RAM Only | SRAM: 7/256 pkts");
+        assert_eq!(status_ram.drop_count, 12);
     }
 }

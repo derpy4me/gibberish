@@ -277,6 +277,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
 
+                // Ingest local hardware dongle diagnostic heartbeat (e.g. SD vs RAM)
+                if let Some(hb) = fleet::parse_local_heartbeat_line(&line) {
+                    if is_primary_dongle {
+                        local_dongle_ids.insert(hb.node_id);
+                        if !user_specified_node_id && hb.node_id != local_node_id {
+                            local_node_id = hb.node_id;
+                            ipc.set_local_node_id(local_node_id);
+                        }
+                        ipc.set_storage_mode(&hb.storage_mode);
+                        ipc.set_storage_stats(&hb.storage_stats);
+                        ipc.broadcast_event(
+                            "telemetry_update",
+                            serde_json::json!({
+                                "node_id": format!("0x{:08X}", local_node_id),
+                                "storage_mode": hb.storage_mode,
+                                "storage_stats": hb.storage_stats,
+                                "rx_packets": 0,
+                                "tx_packets": 0,
+                                "lqi": 200,
+                                "rssi": -45,
+                            }),
+                        );
+                    }
+                }
+
                 // Ingest telemetry beacon frames (R9, R10)
                 if let Some(telem) = fleet::parse_telemetry_line(&line) {
                     let clean_id = telem.node_id.trim_start_matches("0x");
@@ -352,16 +377,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &wire_pkt.packet,
                     &swarm_master_key,
                 ) {
-                    Ok(Some(decrypted_text)) => {
-                        let text_str = decrypted_text.expose_secret().clone();
+                    Ok(Some(ingested)) => {
+                        let text_str = ingested.text.expose_secret().clone();
                         let now = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_secs() as i64;
                         log.log(&format!(
-                            "[Mesh RX Decrypted] Reassembled message from Peer Node 0x{:08X} ({} chars)",
+                            "[Mesh RX Decrypted] Reassembled message from Peer Node 0x{:08X} ({} chars, flags: 0x{:04X})",
                             wire_pkt.src_node_id,
-                            text_str.len()
+                            text_str.len(),
+                            ingested.flags
                         ));
 
                         // Suppress over-the-air loopback echoes from local dongles attached to this host
@@ -375,6 +401,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             continue;
                         }
 
+                        // Determine conversation ID and target filtering
+                        let (convo_id, is_for_me) = if (ingested.flags & gibberish_protocol::FLAG_DIRECT) != 0 {
+                            if let Some(dest_id) = ingested.dest_node_id {
+                                if dest_id == local_node_id || local_dongle_ids.contains(&dest_id) {
+                                    (format!("0x{:08X}", wire_pkt.src_node_id), true)
+                                } else {
+                                    log.log(&format!(
+                                        "[Mesh RX Overheard DM] Direct message destined for 0x{:08X} (not for local station 0x{:08X}); skipping",
+                                        dest_id, local_node_id
+                                    ));
+                                    (format!("0x{:08X}", wire_pkt.src_node_id), false)
+                                }
+                            } else {
+                                log.log(&format!(
+                                    "[Mesh RX Warning] Direct message flag set without valid dest_node_id prefix from 0x{:08X}; skipping",
+                                    wire_pkt.src_node_id
+                                ));
+                                (format!("0x{:08X}", wire_pkt.src_node_id), false)
+                            }
+                        } else {
+                            ("#all".to_string(), true)
+                        };
+
+                        if !is_for_me {
+                            continue;
+                        }
+
                         static RX_MSG_COUNTER: std::sync::atomic::AtomicU64 =
                             std::sync::atomic::AtomicU64::new(1);
                         let seq = RX_MSG_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -383,17 +436,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // Persist to database and push to UI via IPC
                         let msg_rec = gibberish_db::MessageRecord {
                             id: msg_id.clone(),
-                            convo_id: "#all".to_string(),
+                            convo_id: convo_id.clone(),
                             sender_node_id: wire_pkt.src_node_id,
                             timestamp: now,
                             text: text_str.clone(),
                             status: gibberish_db::MessageStatus::Delivered,
                         };
                         let _ = ipc.db().insert_message(&msg_rec);
-                        ipc.notify_rx_message(&msg_id, "#all", wire_pkt.src_node_id, &text_str, now, "[OK]");
+                        ipc.notify_rx_message(&msg_id, &convo_id, wire_pkt.src_node_id, &text_str, now, "[OK]");
 
-                        if auto_sync {
-                            if let Err(e) = clipboard_mgr.write_clipboard(&decrypted_text) {
+                        if auto_sync && (ingested.flags & gibberish_protocol::FLAG_CLIPBOARD) != 0 {
+                            if let Err(e) = clipboard_mgr.write_clipboard(&ingested.text) {
                                 log.log(&format!("[Clipboard Write Warning] {}", e));
                             } else {
                                 log.log("[Clipboard Sync] Successfully updated local OS clipboard with remote mesh text!");
@@ -416,17 +469,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // 2. Outbound processing: drain UI IPC messages from send_swarm / send_dm
         while let Ok(outbound_msg) = outbound_rx.try_recv() {
             log.log(&format!(
-                "[Outbound IPC] Transmitting chat message ({}) to RF mesh...",
-                outbound_msg.message_id
+                "[Outbound IPC] Transmitting chat message ({}) to RF mesh for convo {}...",
+                outbound_msg.message_id, outbound_msg.convo_id
             ));
             let secret_msg = Secret::new(outbound_msg.text);
-            match ChunkEngine::fragment_and_encrypt(
-                &secret_msg,
-                swarm_tag,
-                local_node_id,
-                &swarm_master_key,
-                &mut nonce_mgr,
-            ) {
+            let encrypt_result = if let Some(dest_id) = outbound_msg.dest_node_id {
+                ChunkEngine::fragment_and_encrypt_dm(
+                    dest_id,
+                    &secret_msg,
+                    swarm_tag,
+                    local_node_id,
+                    &swarm_master_key,
+                    &mut nonce_mgr,
+                )
+            } else {
+                ChunkEngine::fragment_and_encrypt_with_flags(
+                    &secret_msg,
+                    swarm_tag,
+                    local_node_id,
+                    &swarm_master_key,
+                    &mut nonce_mgr,
+                    gibberish_protocol::FLAG_GROUP,
+                )
+            };
+
+            match encrypt_result {
                 Ok(packets) => {
                     chunk_engine.cache_outbound(&packets);
                     if let Some((primary_port, t)) = transports.first_mut() {

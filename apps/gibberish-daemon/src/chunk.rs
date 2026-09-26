@@ -4,8 +4,8 @@ use crate::nonce::NonceManager;
 use gibberish_crypto::ratchet::{decrypt_chunk, derive_sender_subkey, encrypt_chunk, CryptoError};
 use gibberish_crypto::secrecy::Secret;
 use gibberish_protocol::{
-    MeshHeader, MeshPacket, SackPayload, CIPHERTEXT_LEN, FLAG_CLIPBOARD, FLAG_SACK,
-    PLAINTEXT_CHUNK_LEN,
+    MeshHeader, MeshPacket, SackPayload, CIPHERTEXT_LEN, FLAG_ACK_REQ, FLAG_CLIPBOARD,
+    FLAG_DIRECT, FLAG_GROUP, FLAG_SACK, PLAINTEXT_CHUNK_LEN,
 };
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -18,6 +18,30 @@ pub const SACK_INITIAL_DELAY: Duration = Duration::from_millis(300);
 pub const SACK_RETRY_INTERVAL: Duration = Duration::from_millis(500);
 pub const MAX_SACK_RETRIES: u8 = 3;
 
+#[derive(Debug, Clone)]
+pub struct IngestedMessage {
+    pub text: Secret<String>,
+    pub flags: u16,
+    pub dest_node_id: Option<u32>,
+}
+
+impl IngestedMessage {
+    pub fn new(text: String, flags: u16, dest_node_id: Option<u32>) -> Self {
+        Self {
+            text: Secret::new(text),
+            flags,
+            dest_node_id,
+        }
+    }
+}
+
+impl std::ops::Deref for IngestedMessage {
+    type Target = Secret<String>;
+    fn deref(&self) -> &Self::Target {
+        &self.text
+    }
+}
+
 struct InFlightMessage {
     #[allow(dead_code)]
     total_chunks: usize,
@@ -26,6 +50,7 @@ struct InFlightMessage {
     last_received: Instant,
     last_sack_sent: Option<Instant>,
     sack_count: u8,
+    flags: u16,
 }
 
 pub struct ChunkEngine {
@@ -58,7 +83,66 @@ impl ChunkEngine {
         swarm_master_key: &Secret<[u8; 32]>,
         nonce_mgr: &mut NonceManager,
     ) -> Result<Vec<MeshPacket>, CryptoError> {
-        let raw_bytes = text.expose_secret().as_bytes();
+        Self::fragment_and_encrypt_with_flags(
+            text,
+            swarm_tag,
+            local_node_id,
+            swarm_master_key,
+            nonce_mgr,
+            FLAG_CLIPBOARD,
+        )
+    }
+
+    /// Split a Secret plaintext string into an array of encrypted MeshPackets with custom routing flags.
+    pub fn fragment_and_encrypt_with_flags(
+        text: &Secret<String>,
+        swarm_tag: u64,
+        local_node_id: u32,
+        swarm_master_key: &Secret<[u8; 32]>,
+        nonce_mgr: &mut NonceManager,
+        flags: u16,
+    ) -> Result<Vec<MeshPacket>, CryptoError> {
+        Self::fragment_and_encrypt_bytes(
+            text.expose_secret().as_bytes(),
+            swarm_tag,
+            local_node_id,
+            swarm_master_key,
+            nonce_mgr,
+            flags,
+        )
+    }
+
+    /// Fragment and encrypt a 1-to-1 direct message carrying destination node ID in plaintext header.
+    pub fn fragment_and_encrypt_dm(
+        dest_node_id: u32,
+        text: &Secret<String>,
+        swarm_tag: u64,
+        local_node_id: u32,
+        swarm_master_key: &Secret<[u8; 32]>,
+        nonce_mgr: &mut NonceManager,
+    ) -> Result<Vec<MeshPacket>, CryptoError> {
+        let mut raw_bytes = Vec::with_capacity(4 + text.expose_secret().len());
+        raw_bytes.extend_from_slice(&dest_node_id.to_be_bytes());
+        raw_bytes.extend_from_slice(text.expose_secret().as_bytes());
+        Self::fragment_and_encrypt_bytes(
+            &raw_bytes,
+            swarm_tag,
+            local_node_id,
+            swarm_master_key,
+            nonce_mgr,
+            FLAG_DIRECT | FLAG_ACK_REQ,
+        )
+    }
+
+    /// Internal worker to fragment arbitrary bytes into MeshPackets.
+    pub fn fragment_and_encrypt_bytes(
+        raw_bytes: &[u8],
+        swarm_tag: u64,
+        local_node_id: u32,
+        swarm_master_key: &Secret<[u8; 32]>,
+        nonce_mgr: &mut NonceManager,
+        flags: u16,
+    ) -> Result<Vec<MeshPacket>, CryptoError> {
         if raw_bytes.is_empty() {
             return Ok(Vec::new());
         }
@@ -101,7 +185,7 @@ impl ChunkEngine {
                 total_chunks,
                 ttl: 7, // Multi-hop mesh relay
                 hop_count: 0,
-                flags: FLAG_CLIPBOARD,
+                flags,
             };
 
             packets.push(MeshPacket {
@@ -120,7 +204,7 @@ impl ChunkEngine {
         src_node_id: u32,
         packet: &MeshPacket,
         swarm_master_key: &Secret<[u8; 32]>,
-    ) -> Result<Option<Secret<String>>, CryptoError> {
+    ) -> Result<Option<IngestedMessage>, CryptoError> {
         self.purge_expired();
 
         let msg_id = packet.header.msg_id;
@@ -191,6 +275,7 @@ impl ChunkEngine {
             last_received: now,
             last_sack_sent: None,
             sack_count: 0,
+            flags: packet.header.flags,
         });
 
         // Store chunk if not already present
@@ -211,11 +296,23 @@ impl ChunkEngine {
                 assembled_bytes.pop();
             }
 
+            let flags = entry.flags;
             self.in_flight.remove(&key);
             self.completed_cache.insert(key, now);
 
-            if let Ok(text) = String::from_utf8(assembled_bytes) {
-                return Ok(Some(Secret::new(text)));
+            if (flags & FLAG_DIRECT) != 0 && assembled_bytes.len() >= 4 {
+                let dest_id = u32::from_be_bytes([
+                    assembled_bytes[0],
+                    assembled_bytes[1],
+                    assembled_bytes[2],
+                    assembled_bytes[3],
+                ]);
+                let body_bytes = &assembled_bytes[4..];
+                if let Ok(text) = String::from_utf8(body_bytes.to_vec()) {
+                    return Ok(Some(IngestedMessage::new(text, flags, Some(dest_id))));
+                }
+            } else if let Ok(text) = String::from_utf8(assembled_bytes) {
+                return Ok(Some(IngestedMessage::new(text, flags, None)));
             }
         }
 
@@ -544,5 +641,40 @@ mod tests {
         // Still suppressed
         let sacks3 = receiver_engine.check_pending_sacks(receiver_node, DEFAULT_NETWORK_TAG);
         assert!(sacks3.is_empty());
+    }
+
+    #[test]
+    fn test_fragment_and_reassembly_dm() {
+        let master_key = Secret::new([0x77u8; 32]);
+        let sender_node = 0xAAAA1111;
+        let dest_node = 0xBBBB2222;
+        let mut nonce_mgr = NonceManager::new(Some(
+            std::env::temp_dir().join("test_dm_nonce.json"),
+        ))
+        .unwrap();
+
+        let original_text = Secret::new("Top Secret Direct Message for Bob".to_string());
+
+        let packets = ChunkEngine::fragment_and_encrypt_dm(
+            dest_node,
+            &original_text,
+            DEFAULT_NETWORK_TAG,
+            sender_node,
+            &master_key,
+            &mut nonce_mgr,
+        )
+        .expect("DM Fragmentation failed");
+
+        assert_eq!(packets[0].header.flags & FLAG_DIRECT, FLAG_DIRECT);
+
+        let mut receiver_engine = ChunkEngine::new();
+        let reassembled = receiver_engine
+            .ingest_packet(sender_node, &packets[0], &master_key)
+            .expect("Ingest failed")
+            .expect("Message should be reassembled");
+
+        assert_eq!(reassembled.dest_node_id, Some(dest_node));
+        assert_eq!(reassembled.flags & FLAG_DIRECT, FLAG_DIRECT);
+        assert_eq!(reassembled.text.expose_secret(), original_text.expose_secret());
     }
 }

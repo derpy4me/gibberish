@@ -100,7 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .ingest_packet(wire_pkt.src_node_id, &wire_pkt.packet, &swarm_master_key)
                 .map_err(|e| format!("{:?}", e))?
             {
-                received_on_b = Some(reassembled);
+                received_on_b = Some(reassembled.text);
                 break;
             }
         }
@@ -166,7 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .ingest_packet(wire_pkt.src_node_id, &wire_pkt.packet, &swarm_master_key)
                 .map_err(|e| format!("{:?}", e))?
             {
-                received_on_a = Some(reassembled);
+                received_on_a = Some(reassembled.text);
                 break;
             }
         }

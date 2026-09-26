@@ -187,7 +187,7 @@ impl DesktopIpcTransport {
                     let _ = self.ui_sender.send(UiEvent::TelemetryUpdated {
                         node_id: "0xBEBD82B4".to_string(),
                         storage_mode: "SD ACTIVE".to_string(),
-                        storage_stats: "SRAM: 40/256 KB".to_string(),
+                        storage_stats: "Connecting...".to_string(),
                         tx: 0,
                         rx: 0,
                         channel: 15,
@@ -195,9 +195,10 @@ impl DesktopIpcTransport {
                         status: "CONNECTED".to_string(),
                     });
 
-                    // Query live daemon status and contacts on connect
+                    // Query live daemon status, contacts, and initial message thread on connect
                     let _ = self.get_status();
                     let _ = self.list_contacts();
+                    let _ = self.list_messages("#all", 50, 0);
 
                     let (mut ws_write, mut ws_read) = ws_stream.split();
 
@@ -227,7 +228,7 @@ impl DesktopIpcTransport {
                     let _ = self.ui_sender.send(UiEvent::TelemetryUpdated {
                         node_id: "0xBEBD82B4".to_string(),
                         storage_mode: "SD ACTIVE".to_string(),
-                        storage_stats: "SRAM: 40/256 KB".to_string(),
+                        storage_stats: "Disconnected".to_string(),
                         tx: 0,
                         rx: 0,
                         channel: 15,
@@ -382,10 +383,22 @@ impl DesktopIpcTransport {
                         .and_then(|v| v.as_i64())
                         .unwrap_or(200) as i32;
 
+                    let storage_stats = notif
+                        .params
+                        .get("storage_stats")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_else(|| {
+                            if storage_mode == "SD ACTIVE" {
+                                "MicroSD: Active"
+                            } else {
+                                "RAM Only"
+                            }
+                        });
+
                     let _ = self.ui_sender.send(UiEvent::TelemetryUpdated {
                         node_id: node_id.to_string(),
                         storage_mode: storage_mode.to_string(),
-                        storage_stats: "SRAM: 40/256 KB".to_string(),
+                        storage_stats: storage_stats.to_string(),
                         tx,
                         rx,
                         channel: 15,
@@ -410,6 +423,16 @@ impl DesktopIpcTransport {
                             .or_else(|| obj.get("dongle_mode"))
                             .and_then(|v| v.as_str())
                             .unwrap_or("SD ACTIVE");
+                        let storage_stats = obj
+                            .get("storage_stats")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_else(|| {
+                                if storage_mode == "SD ACTIVE" {
+                                    "MicroSD: Active"
+                                } else {
+                                    "RAM Only"
+                                }
+                            });
                         let attached = obj
                             .get("dongle_attached")
                             .and_then(|v| v.as_bool())
@@ -417,7 +440,7 @@ impl DesktopIpcTransport {
                         let _ = self.ui_sender.send(UiEvent::TelemetryUpdated {
                             node_id: node_id.to_string(),
                             storage_mode: storage_mode.to_string(),
-                            storage_stats: "SRAM: 40/256 KB".to_string(),
+                            storage_stats: storage_stats.to_string(),
                             tx: 0,
                             rx: 0,
                             channel: 15,

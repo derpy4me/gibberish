@@ -68,6 +68,7 @@ pub struct IpcServer {
     outbound_tx: tokio::sync::mpsc::UnboundedSender<OutboundMeshMessage>,
     local_node_id: Arc<AtomicU32>,
     storage_mode: Arc<RwLock<String>>,
+    storage_stats: Arc<RwLock<String>>,
     dongle_attached: Arc<AtomicBool>,
 }
 
@@ -96,6 +97,7 @@ impl IpcServer {
             outbound_tx,
             local_node_id: Arc::new(AtomicU32::new(0)),
             storage_mode: Arc::new(RwLock::new("RAM_ONLY".to_string())),
+            storage_stats: Arc::new(RwLock::new("RAM Only".to_string())),
             dongle_attached: Arc::new(AtomicBool::new(true)),
         };
         (server, outbound_rx)
@@ -111,6 +113,7 @@ impl IpcServer {
             outbound_tx,
             local_node_id: Arc::new(AtomicU32::new(0)),
             storage_mode: Arc::new(RwLock::new("RAM_ONLY".to_string())),
+            storage_stats: Arc::new(RwLock::new("RAM Only".to_string())),
             dongle_attached: Arc::new(AtomicBool::new(true)),
         }
     }
@@ -122,6 +125,12 @@ impl IpcServer {
     pub fn set_storage_mode(&self, mode: &str) {
         if let Ok(mut g) = self.storage_mode.write() {
             *g = mode.to_string();
+        }
+    }
+
+    pub fn set_storage_stats(&self, stats: &str) {
+        if let Ok(mut g) = self.storage_stats.write() {
+            *g = stats.to_string();
         }
     }
 
@@ -276,6 +285,11 @@ fn handle_rpc(server: &IpcServer, req: JsonRpcRequest) -> JsonRpcResponse {
                 .read()
                 .map(|m| m.clone())
                 .unwrap_or_else(|_| "RAM_ONLY".to_string());
+            let stats = server
+                .storage_stats
+                .read()
+                .map(|s| s.clone())
+                .unwrap_or_else(|_| "RAM Only".to_string());
             let attached = server.dongle_attached.load(Ordering::Relaxed);
             let node_hex = if node_id != 0 {
                 format!("0x{:08X}", node_id)
@@ -290,6 +304,7 @@ fn handle_rpc(server: &IpcServer, req: JsonRpcRequest) -> JsonRpcResponse {
                     "dongle_attached": attached,
                     "dongle_mode": mode,
                     "storage_mode": mode,
+                    "storage_stats": stats,
                     "local_node_id": node_hex,
                     "node_id": node_hex,
                     "mesh_active": true

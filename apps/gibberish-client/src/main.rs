@@ -23,7 +23,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let _ = sender.send(UiEvent::TelemetryUpdated {
         node_id: "0xBEBD82B4".to_string(),
         storage_mode: "SD ACTIVE".to_string(),
-        storage_stats: "SRAM: 40/256 KB".to_string(),
+        storage_stats: "Connecting...".to_string(),
         tx: 0,
         rx: 0,
         channel: 15,

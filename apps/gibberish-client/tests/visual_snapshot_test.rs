@@ -88,7 +88,7 @@ fn test_render_all_ui_states_snapshots() -> Result<(), Box<dyn std::error::Error
     ui.set_avg_lqi(195);
     ui.set_local_node_id(SharedString::from("0xBEBD82B4"));
     ui.set_storage_mode(SharedString::from("SD ACTIVE"));
-    ui.set_storage_stats(SharedString::from("SRAM: 42/256 KB"));
+    ui.set_storage_stats(SharedString::from("MicroSD Active | SRAM: 0/256 pkts"));
 
     // Render State 1: Swarm Broadcast with active messages and stations
     let frame1 = runtime.render(ui.window())?;
