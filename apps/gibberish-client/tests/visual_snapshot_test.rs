@@ -80,6 +80,26 @@ fn test_render_all_ui_states_snapshots() -> Result<(), Box<dyn std::error::Error
             is_outgoing: false,
             sender_color: slint::Color::from_argb_u8(255, 192, 132, 252), // Purple
         },
+        ChatMessageItem {
+            id: SharedString::from("m4"),
+            convo_id: SharedString::from("#all"),
+            sender: SharedString::from("Me"),
+            text: SharedString::from("Copy Field-Recon-02. Be advised: relay node 0xDEADBEEF reported high packet loss on Channel 15. Switching primary routing table to fallback mesh topology with 3-hop DTN buffer."),
+            timestamp: SharedString::from("18:18:10"),
+            status: SharedString::from("[OK]"),
+            is_outgoing: true,
+            sender_color: slint::Color::from_argb_u8(255, 56, 189, 248), // Cyan
+        },
+        ChatMessageItem {
+            id: SharedString::from("m5"),
+            convo_id: SharedString::from("#all"),
+            sender: SharedString::from("Station-Alpha"),
+            text: SharedString::from("Acknowledged HQ. Relaying updated routing table to perimeter field sensors across Sector 7. Fallback route operational and confirmed."),
+            timestamp: SharedString::from("18:19:42"),
+            status: SharedString::from("[OK]"),
+            is_outgoing: false,
+            sender_color: slint::Color::from_argb_u8(255, 129, 140, 248), // Indigo
+        },
     ];
     let swarm_model: ModelRc<ChatMessageItem> = Rc::new(VecModel::from(swarm_messages)).into();
     ui.set_messages(swarm_model);

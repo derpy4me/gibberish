@@ -158,7 +158,7 @@ export component ChatView inherits Rectangle {
                         // Full-width horizontal rule line extending to right edge
                         Rectangle {
                             height: 1px;
-                            background: #1c2636;
+                            background: #27354a;
                             horizontal-stretch: 1;
                             y: (parent.height - self.height) / 2;
                         }
@@ -171,7 +171,7 @@ export component ChatView inherits Rectangle {
                         // Full-width horizontal rule line extending from left edge
                         Rectangle {
                             height: 1px;
-                            background: #1c2636;
+                            background: #27354a;
                             horizontal-stretch: 1;
                             y: (parent.height - self.height) / 2;
                         }
@@ -208,15 +208,15 @@ export component ChatView inherits Rectangle {
                         }
                     }
 
-                    // Message Body Text (Canvas Direct, Zero Bubbles)
+                    // Message Body Text (Canvas Direct, Zero Bubbles, Asymmetric Gutters)
                     if !msg.is_outgoing: HorizontalLayout {
                         padding-left: 12px;
+                        padding-right: 60px;
                         spacing: 8px;
 
                         Rectangle {
                             width: 2px;
                             background: msg.sender_color;
-                            border-radius: 1px;
                         }
 
                         Text {
@@ -231,7 +231,7 @@ export component ChatView inherits Rectangle {
                     }
 
                     if msg.is_outgoing: HorizontalLayout {
-                        alignment: end;
+                        padding-left: 60px;
                         padding-right: 12px;
                         spacing: 8px;
 
@@ -241,6 +241,7 @@ export component ChatView inherits Rectangle {
                             font-size: 12px;
                             font-weight: 500;
                             horizontal-alignment: right;
+                            horizontal-stretch: 1;
                             wrap: word-wrap;
                             vertical-alignment: center;
                         }
@@ -248,7 +249,6 @@ export component ChatView inherits Rectangle {
                         Rectangle {
                             width: 2px;
                             background: #38bdf8;
-                            border-radius: 1px;
                         }
                     }
                 }
