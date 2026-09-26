@@ -242,7 +242,7 @@ fn apply_event(
             if let Ok(mut hist) = history_cache.lock() {
                 let list = hist.entry(convo_id.clone()).or_default();
                 // Prevent duplicate insertions
-                if !list.iter().any(|m| m.id == msg.id) {
+                if !list.iter().any(|m| m.id == msg.id || (m.is_outgoing && msg.is_outgoing && m.text == msg.text)) {
                     list.push(msg.clone());
                 }
             }
@@ -251,8 +251,13 @@ fn apply_event(
                 let mut exists = false;
                 for i in 0..messages_model.row_count() {
                     if let Some(m) = messages_model.row_data(i) {
-                        if m.id == msg.id {
+                        if m.id == msg.id || (m.is_outgoing && msg.is_outgoing && m.text == msg.text) {
                             exists = true;
+                            if m.status != msg.status {
+                                let mut updated = m;
+                                updated.status = msg.status.clone();
+                                messages_model.set_row_data(i, updated);
+                            }
                             break;
                         }
                     }
@@ -431,35 +436,32 @@ impl SlintController {
                     .map(|d| d.as_secs() as i64)
                     .unwrap_or(0);
 
-                let mut sent_via_ipc = false;
                 if let Ok(guard) = transport_send.lock() {
                     if let Some(t) = guard.as_ref() {
                         if convo == "#all" {
-                            sent_via_ipc = t.send_swarm(txt.as_str()).is_ok();
+                            let _ = t.send_swarm(txt.as_str());
                         } else {
                             let clean = convo.trim_start_matches("0x");
                             if let Ok(dest_id) = u32::from_str_radix(clean, 16) {
-                                sent_via_ipc = t.send_dm(dest_id, txt.as_str()).is_ok();
+                                let _ = t.send_dm(dest_id, txt.as_str());
                             }
                         }
                     }
                 }
 
-                // In standalone or test mode without daemon, reflect message locally
-                if !sent_via_ipc {
-                    let status = if convo == "#all" { "*" } else { "[Q]" };
-                    let is_outgoing = true;
-                    let _ = sender_for_chat.send(UiEvent::MessageReceived(ChatMessageItem {
-                        id: format!("local-{}", now).into(),
-                        convo_id: convo.into(),
-                        sender: "Me".into(),
-                        text: txt,
-                        timestamp: format!("{:02}:{:02}:{:02}", (now % 86400) / 3600, (now % 3600) / 60, now % 60).into(),
-                        status: status.into(),
-                        is_outgoing,
-                        sender_color: derive_sender_color("Me", is_outgoing),
-                    }));
-                }
+                // Immediately reflect message in UI for instant responsiveness
+                let status = if convo == "#all" { "*" } else { "[Q]" };
+                let is_outgoing = true;
+                let _ = sender_for_chat.send(UiEvent::MessageReceived(ChatMessageItem {
+                    id: format!("local-{}", now).into(),
+                    convo_id: convo.into(),
+                    sender: "Me".into(),
+                    text: txt,
+                    timestamp: format!("{:02}:{:02}:{:02}", (now % 86400) / 3600, (now % 3600) / 60, now % 60).into(),
+                    status: status.into(),
+                    is_outgoing,
+                    sender_color: derive_sender_color("Me", is_outgoing),
+                }));
             }
         });
 
