@@ -74,3 +74,7 @@ test-sim:
 # Check security guardrails (deny crypto in firmware)
 check-deny:
     cargo deny check
+
+# Render headless visual UI screenshots across states into docs/screenshots
+screenshot:
+    cargo test -p gibberish-client --test visual_snapshot_test

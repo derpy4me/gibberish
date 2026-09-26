@@ -34,3 +34,6 @@ bip39 = "2.1"
 
 [build-dependencies]
 slint-build = "1.9"
+
+[dev-dependencies]
+slint-snapshot = "0.1.2"
