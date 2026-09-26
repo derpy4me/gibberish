@@ -52,6 +52,9 @@ echo "📸 Capturing UI screenshot..."
 # Look for a window named Gibberish or Slint, or fallback to interactive/desktop capture
 if pgrep -f "gibberish-client" > /dev/null; then
     echo "Gibberish client process detected (PID: $(pgrep -f gibberish-client))."
+    # Bring client window to foreground on macOS
+    osascript -e 'tell application "System Events" to set frontmost of (first process whose unix id is '$(pgrep -f gibberish-client | head -n1)') to true' 2>/dev/null || true
+    sleep 0.5
     # Capture display without shadow
     screencapture -x -C "${SCREENSHOT_PATH}" || screencapture -x "${SCREENSHOT_PATH}"
 else
