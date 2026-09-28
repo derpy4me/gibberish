@@ -283,6 +283,7 @@ pub enum DiagnosticEventCode {
     BleAuthTimeout = 12,
     StorageTornWriteDiscarded = 13,
     StorageFlushed = 14,
+    StorageOverflow = 15,
 }
 
 impl DiagnosticEventCode {
@@ -303,6 +304,7 @@ impl DiagnosticEventCode {
             12 => DiagnosticEventCode::BleAuthTimeout,
             13 => DiagnosticEventCode::StorageTornWriteDiscarded,
             14 => DiagnosticEventCode::StorageFlushed,
+            15 => DiagnosticEventCode::StorageOverflow,
             _ => DiagnosticEventCode::None,
         }
     }

@@ -486,5 +486,36 @@ fn test_cdc_frame_encode_decode_and_crc_resync() {
     assert_eq!(decode_cdc_frame(&cdc_buf[..encoded_len - 5]), Ok(None));
 }
 
+#[test]
+fn test_non_preemptible_phy_window_derivation() {
+    let total_phy_bytes: u32 = 6 + 127;
+    let total_bits: u32 = total_phy_bytes * 8;
+    let total_symbols: u32 = total_bits / 4;
+
+    let duration_us = total_symbols * 16;
+    assert_eq!(duration_us, 4256);
+
+    let duration_ms = duration_us as f64 / 1000.0;
+    assert!((duration_ms - 4.256).abs() < 1e-6);
+    assert!(duration_ms <= 4.256);
+
+    let delta_phy_bytes: u32 = 6 + 55;
+    let delta_bits: u32 = delta_phy_bytes * 8;
+    let delta_symbols: u32 = delta_bits / 4;
+    let delta_duration_us: u32 = delta_symbols * 16;
+    assert_eq!(delta_duration_us, 1952);
+
+    let static_phy_bytes: u32 = 6 + 59;
+    let static_bits: u32 = static_phy_bytes * 8;
+    let static_symbols: u32 = static_bits / 4;
+    let static_duration_us: u32 = static_symbols * 16;
+    assert_eq!(static_duration_us, 2080);
+
+    let psdu_reduction_pct = (127.0 - 55.0) / 127.0 * 100.0;
+    assert!(psdu_reduction_pct > 56.0);
+    let payload_reduction_pct = (96.0 - 24.0) / 96.0 * 100.0;
+    assert_eq!(payload_reduction_pct, 75.0);
+}
+
 
 
