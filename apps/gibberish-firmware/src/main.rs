@@ -15,16 +15,20 @@ use esp_hal::main;
 use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::spi::Mode;
 use esp_hal::time::Rate;
-#[cfg(not(feature = "prod"))]
+#[cfg(feature = "debug-telemetry")]
 macro_rules! log_info {
     ($($arg:tt)*) => {
         esp_println::println!($($arg)*)
     };
 }
 
-#[cfg(feature = "prod")]
+#[cfg(not(feature = "debug-telemetry"))]
 macro_rules! log_info {
-    ($($arg:tt)*) => {};
+    ($($arg:tt)*) => {
+        if false {
+            let _ = format_args!($($arg)*);
+        }
+    };
 }
 
 #[allow(unused_imports)]
@@ -343,11 +347,11 @@ fn main() -> ! {
                     let mut beacon = StaticMetadataBeacon::new();
                     beacon.node_id = full_mac;
                     beacon.uptime_epoch = (telemetry.uptime_secs / u32::MAX) as u16;
-                    #[cfg(feature = "prod")]
+                    #[cfg(not(feature = "debug-telemetry"))]
                     {
                         beacon.build_tier = TelemetryTier::Prod;
                     }
-                    #[cfg(not(feature = "prod"))]
+                    #[cfg(feature = "debug-telemetry")]
                     {
                         beacon.build_tier = TelemetryTier::Debug;
                     }
@@ -508,7 +512,7 @@ fn main() -> ! {
                                 rx_frame.lqi
                             );
 
-                            #[cfg(not(feature = "prod"))]
+                            #[cfg(feature = "debug-telemetry")]
                             {
                                 let mut wire_buf = [0u8; gibberish_protocol::MeshPacket::WIRE_PAYLOAD_LEN];
                                 packet.serialize_payload(&mut wire_buf);
@@ -523,7 +527,7 @@ fn main() -> ! {
                                 }
                             }
 
-                            #[cfg(feature = "prod")]
+                            #[cfg(not(feature = "debug-telemetry"))]
                             {
                                 let mut wire_buf = [0u8; gibberish_protocol::MeshPacket::WIRE_PAYLOAD_LEN];
                                 packet.serialize_payload(&mut wire_buf);
@@ -645,7 +649,7 @@ fn main() -> ! {
         if loop_tick % 200 == 0 {
             telemetry.uptime_secs = telemetry.uptime_secs.saturating_add(1);
 
-            #[cfg(feature = "prod")]
+            #[cfg(not(feature = "debug-telemetry"))]
             {
                 telemetry.sram_ring_used = sram_ring.len() as u16;
                 telemetry.dropped_count = sram_ring.dropped_count();

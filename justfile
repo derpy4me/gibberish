@@ -27,7 +27,7 @@ logs log="/tmp/gibberish/daemon.log":
     @touch {{log}}
     tail -f {{log}}
 
-# Flash firmware to C5 dongle (auto-detects port if not specified)
+# Flash production firmware to C5 dongle (default release is production; auto-detects port if not specified)
 flash port="":
     cd apps/gibberish-firmware && espflash flash {{ if port != "" { "--port " + port } else { "" } }} --release
 
@@ -39,7 +39,7 @@ build-firmware-debug: build-debug
 
 # Build firmware with production profile (60s stealth beacon)
 build-prod:
-    cd apps/gibberish-firmware && cargo build --release --no-default-features --features prod
+    cd apps/gibberish-firmware && cargo build --release
 
 build-firmware-prod: build-prod
 
@@ -51,7 +51,7 @@ flash-firmware-debug port="": (flash-debug port)
 
 # Flash production firmware to C5 dongle (auto-detects port if not specified)
 flash-prod port="":
-    cd apps/gibberish-firmware && espflash flash {{ if port != "" { "--port " + port } else { "" } }} --release --no-default-features --features prod
+    cd apps/gibberish-firmware && espflash flash {{ if port != "" { "--port " + port } else { "" } }} --release
 
 flash-firmware-prod port="": (flash-prod port)
 

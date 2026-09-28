@@ -21,12 +21,15 @@ gibberish-protocol = { path = "../../crates/gibberish-protocol" }
 gibberish-storage = { path = "../../crates/gibberish-storage" }
 
 [features]
-default = ["debug-telemetry"]
+default = []
 debug-telemetry = []
-prod = []
 
 [profile.release]
 opt-level = "s"
 lto = "fat"
 codegen-units = 1
 panic = "abort"
+
+[profile.release-dbg]
+inherits = "release"
+debug = true
