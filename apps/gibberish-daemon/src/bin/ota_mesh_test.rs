@@ -16,8 +16,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(" With Asymmetric Framing, HKDF Subkeys, & Chunk Reassembly  ");
     println!("============================================================\n");
 
-    let port_a_path = "/dev/ttyACM1"; // Dongle A: Node BEBCE5B8 (SD Node)
-    let port_b_path = "/dev/ttyACM0"; // Dongle B: Node BEBD82B4 (RAM Node)
+    let port_a_path = "/dev/ttyACM0"; // Dongle A: Node BEBCE5B8 (ACM0)
+    let port_b_path = "/dev/ttyACM1"; // Dongle B: Node BEBD82B4 (ACM1)
 
     let node_a_id = 0xBEBCE5B8u32;
     let node_b_id = 0xBEBD82B4u32;
@@ -100,7 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .ingest_packet(wire_pkt.src_node_id, &wire_pkt.packet, &swarm_master_key)
                 .map_err(|e| format!("{:?}", e))?
             {
-                received_on_b = Some(reassembled);
+                received_on_b = Some(reassembled.text);
                 break;
             }
         }
@@ -166,7 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .ingest_packet(wire_pkt.src_node_id, &wire_pkt.packet, &swarm_master_key)
                 .map_err(|e| format!("{:?}", e))?
             {
-                received_on_a = Some(reassembled);
+                received_on_a = Some(reassembled.text);
                 break;
             }
         }

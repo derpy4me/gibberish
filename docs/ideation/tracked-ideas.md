@@ -12,6 +12,7 @@ This document tracks, categorizes, and explores emerging ideas, architectural ex
 4. [Multi-Band & Multi-PHY Transports (Frequency-Agnostic Swarm)](#4-multi-band--multi-phy-transports-frequency-agnostic-swarm) — [Issue #21](https://github.com/derpy4me/gibberish/issues/21)
 5. [Auto-Deploy & Stateless Zero-Trace Host Execution](#5-auto-deploy--stateless-zero-trace-host-execution) — [Issue #22](https://github.com/derpy4me/gibberish/issues/22)
 6. [Cryptographic, Signal Security & Entropy Verification Suite](#6-cryptographic-signal-security--entropy-verification-suite) — [Issue #23](https://github.com/derpy4me/gibberish/issues/23)
+7. [Dedicated Telemetry Channel & Transmission Preemption](#7-dedicated-telemetry-channel--transmission-preemption) — [Issue #24](https://github.com/derpy4me/gibberish/issues/24)
 
 ---
 
@@ -196,6 +197,23 @@ Empirically test, verify, and mathematically validate Gibberish's core security 
 
 ---
 
+## 7. Dedicated Telemetry Channel & Transmission Preemption
+
+### Problem Statement
+In half-duplex single-transceiver mesh networks (ESP32-C5 802.15.4 radio), automated periodic telemetry beacons currently share the primary communication channel (Channel 15, 2.425 GHz). When running aggressive telemetry cadences (e.g. 5-second debug intervals), telemetry broadcasts can collide with user chat messages or clipboard burst transmissions, leading to half-duplex frame drops and airtime contention.
+
+### Proposed Solutions
+1. **Airtime Segregation & Preemption**:
+   - Introduce an active-transmission silence window: suppress autonomous telemetry frames for 10–15 seconds whenever user chat traffic or clipboard packets are queued or actively being transmitted.
+   - Adjust default telemetry cadence to 30s–60s randomized jitter in production builds, triggering immediate broadcasts only on state changes (boot, link drop, contact discovery).
+2. **Dedicated Channel / PAN ID Segregation**:
+   - Investigate dedicated telemetry RF frequency channels (e.g. Channel 20 or 26 for telemetry vs. Channel 15 for chat) with time-sliced channel scanning, or dedicated 802.15.4 PAN IDs for MAC-level hardware filtering.
+   - Evaluate trade-offs between radio deafness during channel-hop windows versus pure airtime duty-cycle management.
+3. **Telemetry Carrier-Sense Backoff**:
+   - Implement exponential backoff for telemetry frames when CCA detects active preamble or packet energy on the airwaves.
+
+---
+
 ## Tracking & Next Steps
 
 - [ ] Convene design discussion on **Channel Selection** (Rendezvous vs. Key-Derivation vs. Dynamic Sniffing).
@@ -203,3 +221,4 @@ Empirically test, verify, and mathematically validate Gibberish's core security 
 - [ ] Design the `PhysicalTransport` trait in `crates/gibberish-protocol` to prepare for generic Zigbee / desktop-native hardware.
 - [ ] Benchmark ESP32-C5 USB Composite (CDC-ACM + MSC) in bare-metal Rust.
 - [ ] Build entropy analysis script (`tools/entropy-test`) running `ent` and NIST tests on serialized wire frames.
+- [ ] Implement active-transmission telemetry suppression & backoff ([Issue #24](https://github.com/derpy4me/gibberish/issues/24)).

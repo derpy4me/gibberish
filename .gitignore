@@ -15,9 +15,15 @@ target/
 /tmp/
 scratchpad/
 nonce_state.json
+mutants.out*
+/.cargo/
 
 # Environment overrides
 .env
 .env.local
 .envrc
 /.gh/
+
+# Visual snapshot artifacts
+docs/screenshots/
+

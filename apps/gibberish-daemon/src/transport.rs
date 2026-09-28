@@ -1,6 +1,6 @@
 //! USB CDC-ACM Serial transport to LilyGO T-Dongle-C5 (R1, R3, R4, KTD2).
 
-use gibberish_protocol::MeshPacket;
+use gibberish_protocol::{decode_cdc_frame, CDC_FRAME_MAGIC, ClosedTelemetry, MeshPacket};
 use serialport::SerialPort;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -19,6 +19,7 @@ pub struct ReceivedWirePacket {
 pub struct SerialTransport {
     port: Box<dyn SerialPort>,
     read_buf: Vec<u8>,
+    pub detected_node_id: Option<u32>,
 }
 
 impl SerialTransport {
@@ -26,11 +27,12 @@ impl SerialTransport {
         let port = serialport::new(port_path, 115_200)
             .timeout(Duration::from_millis(100))
             .open()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
 
         Ok(Self {
             port,
             read_buf: Vec::with_capacity(DONGLE_TO_HOST_LINE_LIMIT),
+            detected_node_id: None,
         })
     }
 
@@ -83,7 +85,7 @@ impl SerialTransport {
     }
 
     /// Poll incoming serial stream, returning extracted wire packets and informational log lines.
-    /// Resilient against interleaved println! logs and capped at 1,024 bytes per line (R3).
+    /// Resilient against interleaved binary CDC frames, println! logs, and capped at buffer limits.
     pub fn poll_stream(&mut self) -> (Vec<ReceivedWirePacket>, Vec<String>) {
         let mut packets = Vec::new();
         let mut logs = Vec::new();
@@ -95,28 +97,31 @@ impl SerialTransport {
                     if n > 0 {
                         self.read_buf.extend_from_slice(&chunk[..n]);
 
-                        // Enforce 1,024 byte safety limit: if buffer exceeds limit without newline,
-                        // drop bytes until the next newline or clear buffer
-                        if self.read_buf.len() > DONGLE_TO_HOST_LINE_LIMIT {
-                            if let Some(pos) = self.read_buf.iter().position(|&b| b == b'\n') {
-                                self.read_buf.drain(..=pos);
-                            } else {
-                                self.read_buf.clear();
+                        let (pkts, telems, log_lines) = parse_cdc_stream_sliding_window(&mut self.read_buf);
+                        packets.extend(pkts);
+                        for line in &log_lines {
+                            if let Some(id) = parse_dongle_node_id(line) {
+                                self.detected_node_id = Some(id);
                             }
                         }
-
-                        while let Some(pos) = self.read_buf.iter().position(|&b| b == b'\n') {
-                            let line_bytes: Vec<u8> = self.read_buf.drain(..=pos).collect();
-                            if let Ok(s) = std::str::from_utf8(&line_bytes) {
-                                let trimmed = s.trim();
-                                if !trimmed.is_empty() {
-                                    if let Some(wire_pkt) = parse_pkt_line(trimmed) {
-                                        packets.push(wire_pkt);
-                                    } else {
-                                        logs.push(trimmed.to_string());
-                                    }
-                                }
-                            }
+                        logs.extend(log_lines);
+                        for telem in telems {
+                            let storage_str = match telem.storage_mode {
+                                gibberish_protocol::StorageModeStatus::MicroSdActive => "SD ACTIVE",
+                                gibberish_protocol::StorageModeStatus::RamOnly => "RAM ONLY",
+                            };
+                            let node_hex = format!("{:08X}", self.detected_node_id.unwrap_or(0));
+                            logs.push(format!(
+                                "[Telemetry RX] Node: {}, Tier: PROD, Storage: {}, Uptime: {}s, SRAM: {}/256, Drops: {}, RX: {}, TX: {}, RSSI: {} dBm, LQI: 255",
+                                node_hex,
+                                storage_str,
+                                telem.uptime_secs,
+                                telem.sram_ring_used,
+                                telem.dropped_count,
+                                telem.rx_packet_count,
+                                telem.tx_packet_count,
+                                telem.last_rssi,
+                            ));
                         }
                     }
                 }
@@ -131,6 +136,104 @@ impl SerialTransport {
         let (_pkts, logs) = self.poll_stream();
         logs
     }
+}
+
+/// Scans a byte buffer for CRC16-CCITT validated CDC frames and/or ASCII lines using a sliding window.
+/// Handles interleaved plaintext logs, corrupt frames, noise, and valid framed Postcard or MeshPacket binaries.
+pub fn parse_cdc_stream_sliding_window(
+    read_buf: &mut Vec<u8>,
+) -> (Vec<ReceivedWirePacket>, Vec<ClosedTelemetry>, Vec<String>) {
+    let mut packets = Vec::new();
+    let mut telemetries = Vec::new();
+    let mut logs = Vec::new();
+
+    if read_buf.len() > DONGLE_TO_HOST_LINE_LIMIT * 4 {
+        let drain_len = read_buf.len().saturating_sub(DONGLE_TO_HOST_LINE_LIMIT);
+        read_buf.drain(..drain_len);
+    }
+
+    loop {
+        if read_buf.is_empty() {
+            break;
+        }
+
+        // 1. Check if buffer starts with binary CDC magic [0xAA, 0x55]
+        if read_buf.len() >= 2 && read_buf[0..2] == CDC_FRAME_MAGIC {
+            match decode_cdc_frame(read_buf) {
+                Ok(Some((consumed, payload))) => {
+                    if payload.len() == MeshPacket::WIRE_PAYLOAD_LEN {
+                        let pkt = MeshPacket::deserialize_payload(payload.try_into().unwrap());
+                        packets.push(ReceivedWirePacket {
+                            src_node_id: 0,
+                            packet: pkt,
+                        });
+                    } else if let Ok(telem) = postcard::from_bytes::<ClosedTelemetry>(payload) {
+                        telemetries.push(telem);
+                    }
+                    read_buf.drain(..consumed);
+                    continue;
+                }
+                Ok(None) => {
+                    // Frame header valid or partially received, waiting for more bytes
+                    break;
+                }
+                Err(_) => {
+                    // CRC mismatch or bad magic: false-positive magic or corrupted frame.
+                    // Slide window forward by 1 byte to resynchronize on the next valid frame.
+                    read_buf.drain(..1);
+                    continue;
+                }
+            }
+        }
+
+        // 2. Check for newline-delimited ASCII log line
+        if let Some(nl_pos) = read_buf.iter().position(|&b| b == b'\n') {
+            if let Some(magic_pos) = read_buf[..nl_pos]
+                .windows(2)
+                .position(|w| w == CDC_FRAME_MAGIC)
+            {
+                if magic_pos > 0 {
+                    let line_bytes: Vec<u8> = read_buf.drain(..magic_pos).collect();
+                    let s = String::from_utf8_lossy(&line_bytes);
+                    let trimmed = s.trim();
+                    if !trimmed.is_empty() {
+                        logs.push(trimmed.to_string());
+                    }
+                }
+                continue;
+            }
+
+            let line_bytes: Vec<u8> = read_buf.drain(..=nl_pos).collect();
+            let s = String::from_utf8_lossy(&line_bytes);
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                if let Some(wire_pkt) = parse_pkt_line(trimmed) {
+                    packets.push(wire_pkt);
+                } else {
+                    logs.push(trimmed.to_string());
+                }
+            }
+            continue;
+        }
+
+        // 3. No newline. Check if CDC_FRAME_MAGIC appears anywhere in the buffer.
+        if let Some(magic_pos) = read_buf.windows(2).position(|w| w == CDC_FRAME_MAGIC) {
+            if magic_pos > 0 {
+                let text_bytes: Vec<u8> = read_buf.drain(..magic_pos).collect();
+                let s = String::from_utf8_lossy(&text_bytes);
+                let trimmed = s.trim();
+                if !trimmed.is_empty() {
+                    logs.push(trimmed.to_string());
+                }
+            }
+            continue;
+        }
+
+        // Wait for more data
+        break;
+    }
+
+    (packets, telemetries, logs)
 }
 
 /// Parses an ASCII line: `#PKT# <8-hex src_node_id> <228-hex wire_packet>`
@@ -286,5 +389,61 @@ pub mod tests {
         assert_eq!(framed[1], 0x55);
         assert_eq!(framed[2], 0x72); // 114
         assert_eq!(framed.len(), 117);
+    }
+
+    #[test]
+    fn test_framed_postcard_crc16_validation_and_resync() {
+        use gibberish_protocol::{encode_cdc_frame, ClosedTelemetry, DiagnosticEventCode, StorageModeStatus};
+
+        let mut telem = ClosedTelemetry::new();
+        telem.uptime_secs = 1234;
+        telem.rx_packet_count = 50;
+        telem.tx_packet_count = 25;
+        telem.dropped_count = 1;
+        telem.sram_ring_used = 12;
+        telem.storage_mode = StorageModeStatus::MicroSdActive;
+        telem.last_event = DiagnosticEventCode::RadioRxOk;
+        telem.last_rssi = -30;
+
+        let mut postcard_buf = [0u8; 64];
+        let postcard_slice = postcard::to_slice(&telem, &mut postcard_buf).unwrap();
+
+        let mut valid_frame = [0u8; 80];
+        let valid_frame_len = encode_cdc_frame(postcard_slice, &mut valid_frame).unwrap();
+
+        // 1. Valid frame parses cleanly
+        let mut buf = valid_frame[..valid_frame_len].to_vec();
+        let (pkts, telems, _logs) = parse_cdc_stream_sliding_window(&mut buf);
+        assert!(buf.is_empty());
+        assert_eq!(pkts.len(), 0);
+        assert_eq!(telems.len(), 1);
+        assert_eq!(telems[0].uptime_secs, 1234);
+        assert_eq!(telems[0].storage_mode, StorageModeStatus::MicroSdActive);
+
+        // 2. Stream with leading noise and trailing text logs
+        let mut stream = Vec::new();
+        stream.extend_from_slice(b"random garbage noise before frame\n");
+        stream.extend_from_slice(&valid_frame[..valid_frame_len]);
+        stream.extend_from_slice(b"another line of text after frame\n");
+
+        let (_pkts, telems, logs) = parse_cdc_stream_sliding_window(&mut stream);
+        assert!(stream.is_empty());
+        assert_eq!(telems.len(), 1);
+        assert_eq!(telems[0].uptime_secs, 1234);
+        assert!(logs.iter().any(|l| l.contains("random garbage")));
+        assert!(logs.iter().any(|l| l.contains("another line")));
+
+        // 3. Corrupted CRC frame followed by valid frame (sliding-window resynchronization)
+        let mut corrupt_frame = valid_frame[..valid_frame_len].to_vec();
+        corrupt_frame[5] ^= 0xFF; // Invalidate CRC
+
+        let mut stream_corrupt = Vec::new();
+        stream_corrupt.extend_from_slice(&corrupt_frame);
+        stream_corrupt.extend_from_slice(&valid_frame[..valid_frame_len]);
+
+        let (_pkts, telems, _logs) = parse_cdc_stream_sliding_window(&mut stream_corrupt);
+        assert!(stream_corrupt.is_empty());
+        assert_eq!(telems.len(), 1);
+        assert_eq!(telems[0].uptime_secs, 1234);
     }
 }

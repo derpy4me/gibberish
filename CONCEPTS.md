@@ -77,4 +77,15 @@ A delay-tolerant networking pattern where messages addressed to offline mesh sta
 ### Short Authentication String (SAS) Verification
 An out-of-band cryptographic verification pattern where peers mathematically derive a matching 4-word mnemonic or short numeric code from their respective public keys and compare them verbally or via QR code, proving contact authenticity and eliminating airwave impersonation without centralized certificate authorities.
 
+### Multi-Dongle Airwave Loopback Suppression
+A host-side loopback suppression discipline in multi-transceiver environments where a host companion daemon connected to multiple physical RF dongles tracks all local hardware station IDs, discarding over-the-air packet reflections transmitted by one local dongle and overheard by another before injecting them into the local database, IPC, or UI chat model.
 
+### Payload-Enclosed Destination Routing
+An in-band routing mechanism for MTU-constrained physical frames where recipient station addresses are embedded directly inside authenticated payload chunks rather than the unencrypted wire header.
+
+This preserves fixed-size radio frame headers across intermediate forwarding hops, allowing blind relay nodes to handle packets opaquely while endpoints inspect the decrypted prefix to route messages into targeted conversation channels.
+
+### Optimistic Chat Reflection
+A user interface synchronization pattern where locally dispatched chat messages are immediately injected into conversation models with a pending status flag prior to transport confirmation.
+
+When background daemon or physical transport acknowledgment arrives, the client reconciles status without re-rendering or duplicating message entries, eliminating human-perceptible transmission lag.

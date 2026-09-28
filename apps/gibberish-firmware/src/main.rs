@@ -15,18 +15,30 @@ use esp_hal::main;
 use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::spi::Mode;
 use esp_hal::time::Rate;
-use esp_println::println;
+#[cfg(not(feature = "prod"))]
+macro_rules! log_info {
+    ($($arg:tt)*) => {
+        esp_println::println!($($arg)*)
+    };
+}
 
+#[cfg(feature = "prod")]
+macro_rules! log_info {
+    ($($arg:tt)*) => {};
+}
+
+#[allow(unused_imports)]
 use gibberish_protocol::{
-    is_valid_network_tag, ClosedTelemetry, DebugTelemetryPayload, DiagnosticEventCode, PeerTable,
-    TelemetryTier, CIPHERTEXT_LEN, DEFAULT_NETWORK_TAG, FLAG_CLIPBOARD, FLAG_TELEMETRY,
+    encode_cdc_frame, is_valid_network_tag, ClosedTelemetry, CompactDeltaPayload,
+    DiagnosticEventCode, PeerTable, StaticMetadataBeacon, StorageModeStatus, TelemetryTier,
+    DEFAULT_NETWORK_TAG, FLAG_CLIPBOARD, FLAG_TELEMETRY, FLAG_TELEMETRY_STATIC,
 };
 use gibberish_storage::sram_ring::SramRingBuffer;
 
 use crate::radio::ble_gate::{BleAuthState, BleSecurityGate};
 use crate::radio::coex::{RadioSlot, TdmArbiter};
 use crate::radio::dedup::SlidingBloomFilter;
-use crate::radio::ieee802154::{BackoffController, RadioManager};
+use crate::radio::ieee802154::{BackoffController, FrameKind, PendingTx, RadioManager};
 use crate::storage::sd_driver::{DynamicStorageManager, SpiSdBlockDevice};
 use crate::ui::display::St7735;
 use crate::ui::led::Apa102;
@@ -39,19 +51,19 @@ fn main() -> ! {
     let peripherals = esp_hal::init(esp_hal::Config::default());
     let mut delay = Delay::new();
 
-    println!("\n=============================================");
-    println!(" Project Gibberish - Encrypted Mesh Dongle   ");
-    println!(" LilyGO T-Dongle-C5 Bare-Metal Firmware      ");
-    println!(" Zero-Trust Blind Transport & Dual-Mode Sink ");
-    println!("=============================================\n");
+    log_info!("\n=============================================");
+    log_info!(" Project Gibberish - Encrypted Mesh Dongle   ");
+    log_info!(" LilyGO T-Dongle-C5 Bare-Metal Firmware      ");
+    log_info!(" Zero-Trust Blind Transport & Dual-Mode Sink ");
+    log_info!("=============================================\n");
 
     // 1. Read Hardware MAC for Node Identification
     let mac = efuse::interface_mac_address(InterfaceMacAddress::Station);
     let mac_bytes = mac.as_bytes();
-    let mut full_mac = [0u8; 8];
-    full_mac[2..8].copy_from_slice(mac_bytes);
     let local_node_id = u32::from_be_bytes([mac_bytes[2], mac_bytes[3], mac_bytes[4], mac_bytes[5]]);
-    println!("Node ID: {:08X} (MAC: {:02X?})", local_node_id, mac_bytes);
+    let mut full_mac = [0u8; 8];
+    full_mac[4..8].copy_from_slice(&local_node_id.to_be_bytes());
+    log_info!("Node ID: {:08X} (MAC: {:02X?})", local_node_id, mac_bytes);
 
     // 2. APA102 DotStar RGB LED (GPIO 4 Clock, GPIO 5 Data)
     let led_clk = Output::new(peripherals.GPIO4, Level::Low, OutputConfig::default());
@@ -84,7 +96,7 @@ fn main() -> ! {
 
     let mut display = St7735::new(&spi_cell, lcd_cs, lcd_dc, lcd_rst, lcd_bl);
     display.init(&mut delay);
-    println!("ST7735 LCD initialized (160x80 Landscape)");
+    log_info!("ST7735 LCD initialized (160x80 Landscape)");
 
     // 4. BOOT Button (GPIO 28, Active-Low with Pull-Up)
     let btn = Input::new(
@@ -99,15 +111,15 @@ fn main() -> ! {
     // 6. Dynamic Storage Manager (Probe SD over SPI, fast fallback to RAM-Only)
     let mut storage = match SpiSdBlockDevice::new(&spi_cell, sd_cs, &mut delay) {
         Ok(sd_device) => {
-            println!("MicroSD card detected & initialized in SPI mode (SDHC/SDSC active)");
+            log_info!("MicroSD card detected & initialized in SPI mode (SDHC/SDSC active)");
             DynamicStorageManager::new_with_device(sd_device)
         }
         Err(_) => {
-            println!("MicroSD card not present or init timeout -> Falling back to Ephemeral RAM-Only Mode");
+            log_info!("MicroSD card not present or init timeout -> Falling back to Ephemeral RAM-Only Mode");
             DynamicStorageManager::new_ram_only()
         }
     };
-    println!("Storage initialized: Mode = {:?}", storage.mode());
+    log_info!("Storage initialized: Mode = {:?}", storage.mode());
 
     // 7. Active Mesh Peer Table (Recent 4 peers with RSSI dBm & hardware LQI)
     let mut peer_table = PeerTable::new();
@@ -147,10 +159,11 @@ fn main() -> ! {
 
     // 12. IEEE 802.15.4 Radio Transceiver (Channel 15, 2.425 GHz)
     let mut radio = RadioManager::new(peripherals.IEEE802154, full_mac, local_node_id);
-    println!("IEEE 802.15.4 Radio Transceiver active on Channel 15 (2.425 GHz)");
+    log_info!("IEEE 802.15.4 Radio Transceiver active on Channel 15 (2.425 GHz)");
 
     // 13. USB Serial JTAG receiver for host CDC packets
-    let (mut usb_rx, _usb_tx) = esp_hal::usb::usb_serial_jtag::UsbSerialJtag::new(peripherals.USB_DEVICE).split();
+    let (mut usb_rx, mut usb_tx) = esp_hal::usb::usb_serial_jtag::UsbSerialJtag::new(peripherals.USB_DEVICE).split();
+    let _ = &mut usb_tx;
     let mut usb_pkt_buf = [0u8; 114];
     let mut usb_pkt_idx: usize = 0;
 
@@ -176,20 +189,31 @@ fn main() -> ! {
     let mut beacon_seq: u32 = 0;
     let mut telem_seq: u32 = 0;
 
-    let calc_next_telem_interval = |rng: &esp_hal::rng::Rng| -> u32 {
-        #[cfg(feature = "prod")]
-        {
-            55_000 + (rng.random() % 10_001) // 60s ± 5s
-        }
-        #[cfg(not(feature = "prod"))]
-        {
-            4_500 + (rng.random() % 1_001) // 5s ± 500ms
-        }
+    // Trickle Cadence (RFC 6206, KTD4): Imin = 10s, Imax = 60s, k = infinity
+    let trickle_imin_ms: u32 = 10_000;
+    let trickle_imax_ms: u32 = 60_000;
+    let mut trickle_interval_ms: u32 = trickle_imin_ms;
+    let mut trickle_elapsed_ms: u32 = 0;
+    let choose_trickle_t = |interval: u32, rng: &esp_hal::rng::Rng| -> u32 {
+        let half = interval / 2;
+        let jitter = rng.random() % half.max(1);
+        half + jitter
     };
-    let mut telem_elapsed_ms: u32 = 0;
-    let mut next_telem_interval_ms: u32 = calc_next_telem_interval(&hw_rng);
+    let mut trickle_t_ms: u32 = choose_trickle_t(trickle_interval_ms, &hw_rng);
+    let mut trickle_fired = false;
+    let mut reset_debounce_ms: u32 = 0;
+    let mut prev_storage_mode = storage.mode();
+    let mut prev_event_code = telemetry.last_event;
 
-    println!("Gibberish firmware initialization complete. Starting main loop.\n");
+    // Static Metadata Beacon cadence: 180s ± 15s TRNG jitter (165s..=195s)
+    let calc_next_static_interval = |rng: &esp_hal::rng::Rng| -> u32 {
+        165_000 + (rng.random() % 30_001)
+    };
+    let mut static_elapsed_ms: u32 = 0;
+    let mut next_static_interval_ms: u32 = calc_next_static_interval(&hw_rng);
+    let mut force_static_beacon = true; // Send initial static beacon on boot so peers discover this node immediately
+
+    log_info!("Gibberish firmware initialization complete. Starting main loop.\n");
 
     loop {
         loop_tick = loop_tick.wrapping_add(1);
@@ -202,7 +226,7 @@ fn main() -> ! {
         // Check BOOT button (GPIO 28, active-low)
         let btn_is_pressed = btn.is_low();
         if btn_is_pressed && !btn_was_pressed {
-            println!("Physical button press detected on GPIO 28!");
+            log_info!("Physical button press detected on GPIO 28!");
             btn_flash_ticks = 40; // 200ms visual flash
 
             beacon_seq = beacon_seq.wrapping_add(1);
@@ -224,13 +248,13 @@ fn main() -> ! {
             // Record in bloom filter so this node does not accept its own relayed beacon
             bloom_filter.insert(beacon_msg_id, 0);
             // Broadcast beacon packet over the airwaves (scheduled via CSMA/CA backoff controller)
-            backoff.schedule_tx(beacon_pkt, 15);
+            let _ = backoff.schedule_high(beacon_pkt, 15);
 
             if ble_gate.on_button_press() {
-                println!("BLE Pairing authorized via physical button!");
+                log_info!("BLE Pairing authorized via physical button!");
                 telemetry.last_event = DiagnosticEventCode::BleAuthGranted;
             } else {
-                println!("Beacon broadcast scheduled via physical button! (MsgID: {:08X})", beacon_msg_id);
+                log_info!("Beacon broadcast scheduled via physical button! (MsgID: {:08X})", beacon_msg_id);
             }
         }
         btn_was_pressed = btn_is_pressed;
@@ -250,224 +274,283 @@ fn main() -> ! {
         // Slot processing
         match active_slot {
             RadioSlot::Ieee802154Mesh => {
-                // 1. Service CSMA/CA backoff controller for pending transmissions
+                // 1. Service CSMA/CA backoff controller for pending transmissions (two-tier priority)
                 if backoff.tick(delta_ms as u16) {
-                    if let Some(packet) = backoff.take_pending() {
-                        let tx_ok = radio.transmit(&packet);
-                        if tx_ok {
-                            telemetry.tx_packet_count = telemetry.tx_packet_count.saturating_add(1);
-                            telemetry.last_event = DiagnosticEventCode::RadioTxOk;
-                            println!(
-                                "[Radio TX] Broadcasted MsgID: {:08X}, Chunk: {}/{}",
-                                packet.header.msg_id,
-                                packet.header.chunk_idx,
-                                packet.header.total_chunks
-                            );
-                        } else {
-                            println!(
-                                "[Radio TX FAIL] MsgID: {:08X}, Chunk: {}/{}",
-                                packet.header.msg_id,
-                                packet.header.chunk_idx,
-                                packet.header.total_chunks
-                            );
+                    if let Some(pending) = backoff.take_pending() {
+                        match pending {
+                            PendingTx::High(packet) => {
+                                let tx_ok = radio.transmit(&packet);
+                                if tx_ok {
+                                    telemetry.tx_packet_count = telemetry.tx_packet_count.saturating_add(1);
+                                    telemetry.last_event = DiagnosticEventCode::RadioTxOk;
+                                    log_info!(
+                                        "[Radio TX] Broadcasted MsgID: {:08X}, Chunk: {}/{}",
+                                        packet.header.msg_id,
+                                        packet.header.chunk_idx,
+                                        packet.header.total_chunks
+                                    );
+                                } else {
+                                    log_info!(
+                                        "[Radio TX FAIL] MsgID: {:08X}, Chunk: {}/{}",
+                                        packet.header.msg_id,
+                                        packet.header.chunk_idx,
+                                        packet.header.total_chunks
+                                    );
+                                }
+                            }
+                            PendingTx::Low(frame) => {
+                                let tx_ok = radio.transmit_variable(&frame.header, frame.payload_slice());
+                                if tx_ok {
+                                    telemetry.tx_packet_count = telemetry.tx_packet_count.saturating_add(1);
+                                    telemetry.last_event = DiagnosticEventCode::RadioTxOk;
+                                    log_info!(
+                                        "[Radio TX Low] Broadcasted MsgID: {:08X}, Len: {}",
+                                        frame.header.msg_id,
+                                        frame.payload_len
+                                    );
+                                } else {
+                                    log_info!(
+                                        "[Radio TX Low FAIL] MsgID: {:08X}, Len: {}",
+                                        frame.header.msg_id,
+                                        frame.payload_len
+                                    );
+                                }
+                            }
                         }
                     }
                 }
 
-                // 2. Periodic Autonomous Telemetry Emitter (R4, R5, R11, R12)
-                telem_elapsed_ms = telem_elapsed_ms.saturating_add(delta_ms);
-                if telem_elapsed_ms >= next_telem_interval_ms {
-                    telem_elapsed_ms = 0;
-                    next_telem_interval_ms = calc_next_telem_interval(&hw_rng);
+                // 2. Autonomous Static Metadata Beacon (180s ± 15s TRNG jitter or SD mount/unmount)
+                static_elapsed_ms = static_elapsed_ms.saturating_add(delta_ms);
+                if static_elapsed_ms >= next_static_interval_ms || force_static_beacon {
+                    static_elapsed_ms = 0;
+                    force_static_beacon = false;
+                    next_static_interval_ms = calc_next_static_interval(&hw_rng);
 
                     telem_seq = telem_seq.wrapping_add(1);
-                    let telem_msg_id = telem_seq; // Monotonic sequence per plan R1/wire spec
+                    let telem_msg_id = telem_seq;
 
                     let telem_hdr = gibberish_protocol::MeshHeader {
                         network_tag: DEFAULT_NETWORK_TAG,
                         msg_id: telem_msg_id,
                         chunk_idx: 0,
                         total_chunks: 1,
-                        ttl: 1, // TTL=1: direct broadcast, consumed locally without mesh relay (R2)
+                        ttl: 1,
+                        hop_count: 0,
+                        flags: FLAG_TELEMETRY_STATIC,
+                    };
+
+                    let mut beacon = StaticMetadataBeacon::new();
+                    beacon.node_id = full_mac;
+                    beacon.uptime_epoch = (telemetry.uptime_secs / u32::MAX) as u16;
+                    #[cfg(feature = "prod")]
+                    {
+                        beacon.build_tier = TelemetryTier::Prod;
+                    }
+                    #[cfg(not(feature = "prod"))]
+                    {
+                        beacon.build_tier = TelemetryTier::Debug;
+                    }
+                    beacon.storage_mode = storage.mode();
+                    beacon.config_epoch = 1;
+
+                    let mut beacon_buf = [0u8; StaticMetadataBeacon::BYTE_LEN];
+                    if beacon.serialize(&mut beacon_buf).is_ok() {
+                        let telem_jitter = (hw_rng.random() % 46) as u16 + 15;
+                        backoff.schedule_low(telem_hdr, &beacon_buf, telem_jitter);
+                    }
+                }
+
+                // 3. RFC 6206 Trickle Cadence (10s..60s, monotonic consistency, discrete event reset with 10s debounce)
+                trickle_elapsed_ms = trickle_elapsed_ms.saturating_add(delta_ms);
+                reset_debounce_ms = reset_debounce_ms.saturating_sub(delta_ms);
+
+                let curr_storage_mode = storage.mode();
+                let is_discrete_event = (curr_storage_mode != prev_storage_mode)
+                    || (telemetry.last_event != prev_event_code
+                        && matches!(
+                            telemetry.last_event,
+                            DiagnosticEventCode::StorageOverflow | DiagnosticEventCode::RadioDroppedTagMismatch
+                        ));
+
+                if is_discrete_event {
+                    if curr_storage_mode != prev_storage_mode {
+                        force_static_beacon = true;
+                    }
+                    if reset_debounce_ms == 0 {
+                        trickle_interval_ms = trickle_imin_ms;
+                        trickle_elapsed_ms = 0;
+                        trickle_t_ms = choose_trickle_t(trickle_interval_ms, &hw_rng);
+                        trickle_fired = false;
+                        reset_debounce_ms = 10_000; // 10s debounce dwell per KTD4
+                        prev_storage_mode = curr_storage_mode;
+                        prev_event_code = telemetry.last_event;
+                    }
+                }
+
+                if !trickle_fired && trickle_elapsed_ms >= trickle_t_ms {
+                    trickle_fired = true;
+
+                    telem_seq = telem_seq.wrapping_add(1);
+                    let telem_msg_id = telem_seq;
+
+                    let telem_hdr = gibberish_protocol::MeshHeader {
+                        network_tag: DEFAULT_NETWORK_TAG,
+                        msg_id: telem_msg_id,
+                        chunk_idx: 0,
+                        total_chunks: 1,
+                        ttl: 1,
                         hop_count: 0,
                         flags: FLAG_TELEMETRY,
                     };
 
-                    let mut telem_payload = [0u8; CIPHERTEXT_LEN];
-                    #[cfg(not(feature = "prod"))]
-                    {
-                        let mut dbg = DebugTelemetryPayload::new();
-                        dbg.uptime_secs = telemetry.uptime_secs;
-                        dbg.rx_count = telemetry.rx_packet_count;
-                        dbg.tx_count = telemetry.tx_packet_count;
-                        dbg.drop_count = sram_ring.dropped_count();
-                        dbg.sram_used = sram_ring.len() as u16;
-                        dbg.storage_mode = storage.mode();
-                        dbg.last_event = telemetry.last_event;
-                        dbg.build_tier = TelemetryTier::Debug;
-                        dbg.free_heap_kb = (esp_alloc::HEAP.free() / 1024) as u8;
-                        dbg.last_rssi = telemetry.last_rssi;
-                        dbg.last_lqi = crate::radio::ieee802154::rssi_to_lqi(telemetry.last_rssi);
-                        dbg.node_mac_tail = full_mac;
-                        dbg.serialize(&mut telem_payload);
-                    }
-                    #[cfg(feature = "prod")]
-                    {
-                        telemetry.sram_ring_used = sram_ring.len() as u16;
-                        telemetry.dropped_count = sram_ring.dropped_count();
-                        telemetry.storage_mode = storage.mode();
-                        let _ = postcard::to_slice(&telemetry, &mut telem_payload[..]);
-                    }
+                    let mut delta_payload = CompactDeltaPayload::new();
+                    delta_payload.uptime_secs = telemetry.uptime_secs;
+                    delta_payload.rx_count = telemetry.rx_packet_count;
+                    delta_payload.tx_count = telemetry.tx_packet_count;
+                    delta_payload.drop_count = sram_ring.dropped_count();
+                    delta_payload.sram_used = sram_ring.len() as u16;
+                    delta_payload.config_epoch = 1;
+                    delta_payload.free_heap_kb = (esp_alloc::HEAP.free() / 1024) as u8;
+                    delta_payload.last_event = telemetry.last_event;
+                    delta_payload.last_rssi = telemetry.last_rssi;
+                    delta_payload.last_lqi = crate::radio::ieee802154::rssi_to_lqi(telemetry.last_rssi);
 
-                    let telem_pkt = gibberish_protocol::MeshPacket {
-                        header: telem_hdr,
-                        payload: telem_payload,
-                    };
-
-                    // User traffic strictly preempts telemetry; yields if user traffic pending (R11)
-                    let telem_jitter = (hw_rng.random() % 46) as u16 + 15; // 15..=60ms contention backoff
-                    let _ = backoff.schedule_telemetry(telem_pkt, telem_jitter);
+                    let mut delta_buf = [0u8; CompactDeltaPayload::BYTE_LEN];
+                    if delta_payload.serialize(&mut delta_buf).is_ok() {
+                        let telem_jitter = (hw_rng.random() % 46) as u16 + 15;
+                        backoff.schedule_low(telem_hdr, &delta_buf, telem_jitter);
+                    }
                 }
 
-                // 3. Poll incoming 802.15.4 wireless mesh frames
-                while let Some(rx) = radio.poll_rx() {
-                    let packet = rx.packet;
+                if trickle_elapsed_ms >= trickle_interval_ms {
+                    trickle_elapsed_ms = 0;
+                    trickle_interval_ms = (trickle_interval_ms.saturating_mul(2)).min(trickle_imax_ms);
+                    trickle_t_ms = choose_trickle_t(trickle_interval_ms, &hw_rng);
+                    trickle_fired = false;
+                }
+
+                // 4. Poll incoming 802.15.4 wireless mesh frames (variable-length PHY)
+                while let Some(rx_frame) = radio.poll_rx_frame() {
+                    let header = rx_frame.header;
 
                     // Verify admission tag
-                    if !is_valid_network_tag(packet.header.network_tag) {
+                    if !is_valid_network_tag(header.network_tag) {
                         telemetry.last_event = DiagnosticEventCode::RadioDroppedTagMismatch;
                         continue;
                     }
 
-                    // Determine sender node ID from 802.15.4 PHY header or debug telemetry payload
-                    let effective_src_node = if rx.src_node_id != 0 {
-                        rx.src_node_id
-                    } else if (packet.header.flags & FLAG_TELEMETRY) != 0
-                        && packet.payload.get(20).copied() == Some(TelemetryTier::Debug as u8)
-                    {
-                        DebugTelemetryPayload::deserialize(&packet.payload).node_id()
-                    } else {
-                        0
-                    };
+                    let effective_src_node = rx_frame.src_node_id;
 
                     // Record peer metrics once per received frame
                     if effective_src_node != 0 && effective_src_node != local_node_id {
-                        peer_table.record_peer(effective_src_node, rx.rssi, rx.lqi);
+                        peer_table.record_peer(effective_src_node, rx_frame.rssi, rx_frame.lqi);
                     }
 
-                    // Check for encrypted clipboard sync frame
-                    if (packet.header.flags & FLAG_CLIPBOARD) != 0 {
-                        sync_anim_ticks = 8; // 2 seconds pulsating animation at 4 Hz
-                    }
+                    match rx_frame.kind {
+                        FrameKind::StaticMetadata(_beacon) => {
+                            telem_flash_ticks = 20; // 100ms magenta visual indicator
+                            telemetry.rx_packet_count = telemetry.rx_packet_count.saturating_add(1);
+                            telemetry.last_event = DiagnosticEventCode::RadioRxOk;
+                            telemetry.last_rssi = rx_frame.rssi;
 
-                    // Check if this is a TELEMETRY frame (R2, R4, R5, R10)
-                    // Telemetry frames have TTL=1, are consumed locally, and MUST NOT pollute the
-                    // mesh deduplication bloom filter or cancel pending user packets via overhearing.
-                    if (packet.header.flags & FLAG_TELEMETRY) != 0 {
-                        telem_flash_ticks = 20; // 100ms magenta visual indicator
-                        telemetry.rx_packet_count = telemetry.rx_packet_count.saturating_add(1);
-                        telemetry.last_event = DiagnosticEventCode::RadioRxOk;
-                        telemetry.last_rssi = rx.rssi;
+                            log_info!(
+                                "[Telemetry RX] Node: {:08X}, Tier: {:?}, Storage: {:?}, Epoch: {}, UptimeEpoch: {}, RSSI: {} dBm, LQI: {}",
+                                _beacon.node_id_u32(),
+                                _beacon.build_tier,
+                                _beacon.storage_mode,
+                                _beacon.config_epoch,
+                                _beacon.uptime_epoch,
+                                rx_frame.rssi,
+                                rx_frame.lqi
+                            );
+                            continue;
+                        }
+                        FrameKind::CompactDelta(_delta) => {
+                            telem_flash_ticks = 20;
+                            telemetry.rx_packet_count = telemetry.rx_packet_count.saturating_add(1);
+                            telemetry.last_event = DiagnosticEventCode::RadioRxOk;
+                            telemetry.last_rssi = rx_frame.rssi;
 
-                        if packet.payload.get(20).copied() == Some(TelemetryTier::Debug as u8) {
-                            let dbg = DebugTelemetryPayload::deserialize(&packet.payload);
-                            let node_id = if effective_src_node != 0 { effective_src_node } else { dbg.node_id() };
-                            println!(
+                            log_info!(
                                 "[Telemetry RX] Node: {:08X}, Tier: {:?}, Storage: {:?}, Uptime: {}s, SRAM: {}/256, Drops: {}, RX: {}, TX: {}, RSSI: {} dBm, LQI: {}",
-                                node_id,
-                                dbg.build_tier,
-                                dbg.storage_mode,
-                                dbg.uptime_secs,
-                                dbg.sram_used,
-                                dbg.drop_count,
-                                dbg.rx_count,
-                                dbg.tx_count,
-                                rx.rssi,
-                                rx.lqi
-                            );
-                        } else if let Ok(closed) = postcard::from_bytes::<ClosedTelemetry>(&packet.payload) {
-                            println!(
-                                "[Telemetry RX] Node: {:08X}, Tier: {:?}, Storage: {:?}, Uptime: {}s, SRAM: {}/256, Drops: {}, RX: {}, TX: {}, RSSI: {} dBm, LQI: {}",
-                                effective_src_node,
-                                TelemetryTier::Prod,
-                                closed.storage_mode,
-                                closed.uptime_secs,
-                                closed.sram_ring_used,
-                                closed.dropped_count,
-                                closed.rx_packet_count,
-                                closed.tx_packet_count,
-                                rx.rssi,
-                                rx.lqi
-                            );
-                        } else {
-                            println!(
-                                "[Telemetry RX] Node: {:08X}, Tier: {:?}, Uptime: {}s, SRAM: {}/256, Drops: {}, RSSI: {} dBm, LQI: {}",
                                 effective_src_node,
                                 TelemetryTier::Debug,
-                                0,
-                                0,
-                                0,
-                                rx.rssi,
-                                rx.lqi
+                                storage.mode(),
+                                _delta.uptime_secs,
+                                _delta.sram_used,
+                                _delta.drop_count,
+                                _delta.rx_count,
+                                _delta.tx_count,
+                                rx_frame.rssi,
+                                rx_frame.lqi
                             );
+                            continue;
                         }
+                        FrameKind::Mesh(packet) => {
+                            if (packet.header.flags & FLAG_CLIPBOARD) != 0 {
+                                sync_anim_ticks = 8;
+                            }
 
-                        // Local consumption without mesh relay (TTL=1) or SRAM ring pollution (R2)
-                        continue;
+                            if bloom_filter.contains(packet.header.msg_id, packet.header.chunk_idx) {
+                                backoff.on_overhear(packet.header.msg_id, packet.header.chunk_idx);
+                                continue;
+                            }
+                            bloom_filter.insert(packet.header.msg_id, packet.header.chunk_idx);
+                            backoff.on_overhear(packet.header.msg_id, packet.header.chunk_idx);
+
+                            log_info!(
+                                "[Radio RX] MsgID: {:08X}, Chunk: {}/{} | RSSI: {} dBm, LQI: {}",
+                                packet.header.msg_id,
+                                packet.header.chunk_idx,
+                                packet.header.total_chunks,
+                                rx_frame.rssi,
+                                rx_frame.lqi
+                            );
+
+                            #[cfg(not(feature = "prod"))]
+                            {
+                                let mut wire_buf = [0u8; gibberish_protocol::MeshPacket::WIRE_PAYLOAD_LEN];
+                                packet.serialize_payload(&mut wire_buf);
+                                let mut hex_buf = [0u8; 228];
+                                const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
+                                for (i, &b) in wire_buf.iter().enumerate() {
+                                    hex_buf[i * 2] = HEX_DIGITS[(b >> 4) as usize];
+                                    hex_buf[i * 2 + 1] = HEX_DIGITS[(b & 0xF) as usize];
+                                }
+                                if let Ok(hex_str) = core::str::from_utf8(&hex_buf) {
+                                    log_info!("#PKT# {:08X} {}", rx_frame.src_node_id, hex_str);
+                                }
+                            }
+
+                            #[cfg(feature = "prod")]
+                            {
+                                let mut wire_buf = [0u8; gibberish_protocol::MeshPacket::WIRE_PAYLOAD_LEN];
+                                packet.serialize_payload(&mut wire_buf);
+                                let mut cdc_buf = [0u8; 128];
+                                if let Ok(len) = gibberish_protocol::encode_cdc_frame(&wire_buf, &mut cdc_buf) {
+                                    let _ = usb_tx.write(&cdc_buf[..len]);
+                                    let _ = usb_tx.flush_tx();
+                                }
+                            }
+
+                            sram_ring.push(packet);
+
+                            let mut fwd_packet = packet;
+                            if rx_frame.lqi >= crate::radio::ieee802154::MIN_RELAY_LQI && fwd_packet.decrement_ttl() {
+                                let jitter = BackoffController::calculate_lqi_relay_jitter(
+                                    rx_frame.lqi,
+                                    (hw_rng.random() % 15) as u16,
+                                );
+                                let _ = backoff.schedule_high(fwd_packet, jitter);
+                            }
+
+                            telemetry.rx_packet_count = telemetry.rx_packet_count.saturating_add(1);
+                            telemetry.last_event = DiagnosticEventCode::RadioRxOk;
+                            telemetry.last_rssi = rx_frame.rssi;
+                            rx_flash_ticks = 20;
+                        }
                     }
-
-                    // Deduplication check: drop packets already seen
-                    if bloom_filter.contains(packet.header.msg_id, packet.header.chunk_idx) {
-                        // Overhearing cancellation (R22): cancel pending retransmit if peer sent it
-                        backoff.on_overhear(packet.header.msg_id, packet.header.chunk_idx);
-                        continue;
-                    }
-                    bloom_filter.insert(packet.header.msg_id, packet.header.chunk_idx);
-
-                    // Overhearing cancellation for our pending TX
-                    backoff.on_overhear(packet.header.msg_id, packet.header.chunk_idx);
-
-                    println!(
-                        "[Radio RX] MsgID: {:08X}, Chunk: {}/{} | RSSI: {} dBm, LQI: {}",
-                        packet.header.msg_id,
-                        packet.header.chunk_idx,
-                        packet.header.total_chunks,
-                        rx.rssi,
-                        rx.lqi
-                    );
-
-                    // Forward to host over USB-CDC as line-delimited ASCII:
-                    // #PKT# <src_node_id:8hex> <wire_packet:228hex>
-                    let mut wire_buf = [0u8; gibberish_protocol::MeshPacket::WIRE_PAYLOAD_LEN];
-                    packet.serialize_payload(&mut wire_buf);
-                    let mut hex_buf = [0u8; 228];
-                    const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
-                    for (i, &b) in wire_buf.iter().enumerate() {
-                        hex_buf[i * 2] = HEX_DIGITS[(b >> 4) as usize];
-                        hex_buf[i * 2 + 1] = HEX_DIGITS[(b & 0xF) as usize];
-                    }
-                    if let Ok(hex_str) = core::str::from_utf8(&hex_buf) {
-                        println!("#PKT# {:08X} {}", rx.src_node_id, hex_str);
-                    }
-
-                    // Push to authoritative SRAM ring buffer (which auto-flushes to SD or buffers in RAM)
-                    sram_ring.push(packet);
-
-                    // Mesh relay: forward if TTL > 0 and link quality satisfies minimum threshold (Issue #2)
-                    let mut fwd_packet = packet;
-                    if rx.lqi >= crate::radio::ieee802154::MIN_RELAY_LQI && fwd_packet.decrement_ttl() {
-                        let jitter = BackoffController::calculate_lqi_relay_jitter(
-                            rx.lqi,
-                            (hw_rng.random() % 15) as u16,
-                        );
-                        backoff.schedule_tx(fwd_packet, jitter);
-                    }
-
-                    // Increment RX counter & update telemetry
-                    telemetry.rx_packet_count = telemetry.rx_packet_count.saturating_add(1);
-                    telemetry.last_event = DiagnosticEventCode::RadioRxOk;
-                    telemetry.last_rssi = rx.rssi;
-                    rx_flash_ticks = 20; // 100ms visual reception indicator
                 }
             }
             RadioSlot::GuardBand => {
@@ -515,13 +598,16 @@ fn main() -> ! {
                             if (packet.header.flags & FLAG_CLIPBOARD) != 0 {
                                 sync_anim_ticks = 8; // Trigger encrypted sync animation on transmission
                             }
-                            println!(
+                            log_info!(
                                 "[USB RX] MsgID: {:08X}, Chunk: {}/{}",
                                 packet.header.msg_id, packet.header.chunk_idx, packet.header.total_chunks
                             );
                             bloom_filter.insert(packet.header.msg_id, packet.header.chunk_idx);
                             sram_ring.push(packet);
-                            backoff.schedule_tx(packet, 15);
+                            if backoff.schedule_high(packet, 15).is_err() {
+                                telemetry.dropped_count = telemetry.dropped_count.saturating_add(1);
+                                telemetry.last_event = DiagnosticEventCode::StorageOverflow;
+                            }
                         }
                         usb_pkt_idx = 0;
                         usb_rx_state = UsbRxState::Sync0;
@@ -559,8 +645,24 @@ fn main() -> ! {
         if loop_tick % 200 == 0 {
             telemetry.uptime_secs = telemetry.uptime_secs.saturating_add(1);
 
+            #[cfg(feature = "prod")]
+            {
+                telemetry.sram_ring_used = sram_ring.len() as u16;
+                telemetry.dropped_count = sram_ring.dropped_count();
+                telemetry.storage_mode = storage.mode();
+
+                let mut postcard_buf = [0u8; 64];
+                if let Ok(slice) = postcard::to_slice(&telemetry, &mut postcard_buf) {
+                    let mut cdc_buf = [0u8; 80];
+                    if let Ok(len) = encode_cdc_frame(slice, &mut cdc_buf) {
+                        let _ = usb_tx.write(&cdc_buf[..len]);
+                        let _ = usb_tx.flush_tx();
+                    }
+                }
+            }
+
             if telemetry.uptime_secs % 2 == 0 {
-                println!(
+                log_info!(
                     "[Node {:08X}] Uptime: {}s | Storage: {:?} | SRAM: {}/256 pkts | Drops: {}",
                     local_node_id,
                     telemetry.uptime_secs,

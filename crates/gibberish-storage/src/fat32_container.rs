@@ -296,8 +296,8 @@ impl<D: BlockDevice> DynamicStorageManager<D> {
                     sram_ring.pop();
 
                     // Periodic ping-pong checkpointing (every 16 chunks)
-                    if self.current_sequence % 16 == 0 {
-                        let ckpt_lba = if (self.current_sequence % 32) == 0 { 1 } else { 2 };
+                    if self.current_sequence.is_multiple_of(16) {
+                        let ckpt_lba = if self.current_sequence.is_multiple_of(32) { 1 } else { 2 };
                         let ckpt = CheckpointSector {
                             sequence: self.current_sequence,
                             head_offset: (self.current_lba as u64) * (SECTOR_SIZE as u64),

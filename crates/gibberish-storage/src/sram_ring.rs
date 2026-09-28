@@ -18,6 +18,12 @@ pub struct SramRingBuffer {
     dropped_overflow: u32,
 }
 
+impl Default for SramRingBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SramRingBuffer {
     pub const fn new() -> Self {
         const INIT_SLOT: Option<MeshPacket> = None;

@@ -44,8 +44,8 @@ fn test_mesh_packet_payload_roundtrip_and_ttl() {
     };
 
     let mut payload = [0u8; CIPHERTEXT_LEN];
-    for i in 0..CIPHERTEXT_LEN {
-        payload[i] = (i & 0xFF) as u8;
+    for (i, byte) in payload.iter_mut().enumerate().take(CIPHERTEXT_LEN) {
+        *byte = (i as u8).wrapping_add(1);
     }
 
     let mut packet = MeshPacket { header, payload };
@@ -225,7 +225,7 @@ fn test_peer_table_lifecycle_and_eviction() {
     assert_eq!(active_peers, vec![0xCCCC3333, 0xDDDD4444, 0xBBBB2222, 0xEEEE5555]);
     assert_eq!(table.primary_peer().unwrap().node_id, 0xEEEE5555);
 
-    assert_eq!(table.is_empty(), false);
+    assert!(!table.is_empty());
     assert_eq!(table.len(), 4);
     assert_eq!(table.get_peer(0xAAAA1111), None); // Evicted
     assert_eq!(table.get_peer(0xEEEE5555).unwrap().node_id, 0xEEEE5555);
@@ -310,6 +310,211 @@ fn test_lqi_backoff_and_gating() {
     assert!(base_255 < base_200);
     assert!(base_200 < base_100);
     assert!(base_100 < base_30);
+}
+
+#[test]
+fn test_static_metadata_beacon_exact_size_and_roundtrip() {
+    assert_eq!(core::mem::size_of::<StaticMetadataBeacon>(), 28);
+    assert_eq!(StaticMetadataBeacon::BYTE_LEN, 28);
+
+    let mut beacon = StaticMetadataBeacon::new();
+    beacon.node_id = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
+    beacon.uptime_epoch = 42;
+    beacon.hw_rev = 3;
+    beacon.build_tier = TelemetryTier::Prod;
+    beacon.storage_mode = StorageModeStatus::MicroSdActive;
+    beacon.schema_version = 2;
+    beacon.config_epoch = 7;
+
+    assert_eq!(beacon.node_id_u32(), 0x05060708);
+
+    let mut buf = [0u8; 28];
+    assert!(beacon.serialize(&mut buf).is_ok());
+
+    let deserialized = StaticMetadataBeacon::deserialize(&buf).expect("deserialize failed");
+    assert_eq!(deserialized, beacon);
+    assert_eq!(deserialized.node_id_u32(), 0x05060708);
+    assert_eq!(deserialized.uptime_epoch, 42);
+    assert_eq!(deserialized.config_epoch, 7);
+
+    // Buffer too short test
+    let mut short_buf = [0u8; 27];
+    assert_eq!(beacon.serialize(&mut short_buf), Err(FramingError::BufferTooShort));
+    assert_eq!(StaticMetadataBeacon::deserialize(&short_buf), Err(FramingError::BufferTooShort));
+}
+
+#[test]
+fn test_compact_delta_payload_exact_size_and_roundtrip() {
+    assert_eq!(core::mem::size_of::<CompactDeltaPayload>(), 24);
+    assert_eq!(CompactDeltaPayload::BYTE_LEN, 24);
+
+    let mut delta = CompactDeltaPayload::new();
+    delta.uptime_secs = 123456;
+    delta.rx_count = 1000;
+    delta.tx_count = 500;
+    delta.drop_count = 12;
+    delta.sram_used = 18;
+    delta.config_epoch = 7;
+    delta.free_heap_kb = 128;
+    delta.last_event = DiagnosticEventCode::SdMounted;
+    delta.last_rssi = -65;
+    delta.last_lqi = 210;
+
+    let mut buf = [0u8; 24];
+    assert!(delta.serialize(&mut buf).is_ok());
+
+    let deserialized = CompactDeltaPayload::deserialize(&buf).expect("deserialize failed");
+    assert_eq!(deserialized, delta);
+    assert_eq!(deserialized.uptime_secs, 123456);
+    assert_eq!(deserialized.config_epoch, 7);
+    assert_eq!(deserialized.last_rssi, -65);
+    assert_eq!(deserialized.last_lqi, 210);
+
+    // Buffer too short test
+    let mut short_buf = [0u8; 23];
+    assert_eq!(delta.serialize(&mut short_buf), Err(FramingError::BufferTooShort));
+    assert_eq!(CompactDeltaPayload::deserialize(&short_buf), Err(FramingError::BufferTooShort));
+}
+
+#[test]
+fn test_rfc1982_epoch_comparison() {
+    // Equal
+    assert_eq!(compare_epoch(5, 5), EpochComparison::Equal);
+    assert_eq!(compare_epoch(255, 255), EpochComparison::Equal);
+
+    // Normal sequential newer
+    assert_eq!(compare_epoch(2, 1), EpochComparison::Newer);
+    assert_eq!(compare_epoch(127, 1), EpochComparison::Newer);
+    // Rollover newer (0 is newer than 255)
+    assert_eq!(compare_epoch(0, 255), EpochComparison::Newer);
+    assert_eq!(compare_epoch(10, 250), EpochComparison::Newer);
+
+    // Normal sequential older
+    assert_eq!(compare_epoch(1, 2), EpochComparison::Older);
+    assert_eq!(compare_epoch(255, 0), EpochComparison::Older);
+    assert_eq!(compare_epoch(250, 10), EpochComparison::Older);
+
+    // Ambiguous equidistant boundary (wrapping diff == 128)
+    assert_eq!(compare_epoch(128, 0), EpochComparison::Ambiguous);
+    assert_eq!(compare_epoch(0, 128), EpochComparison::Ambiguous);
+    assert_eq!(compare_epoch(200, 72), EpochComparison::Ambiguous);
+    assert_eq!(compare_epoch(72, 200), EpochComparison::Ambiguous);
+}
+
+#[test]
+fn test_variable_phy_frame_assembly_and_parsing() {
+    let mhr = [0x41, 0x88, 0x01, 0x22, 0x11, 0xFF, 0xFF, 0xAA, 0xBB, 0xCC, 0xDD];
+    let header = MeshHeader {
+        network_tag: DEFAULT_NETWORK_TAG,
+        msg_id: 0x12345678,
+        chunk_idx: 0,
+        total_chunks: 1,
+        ttl: 4,
+        hop_count: 0,
+        flags: FLAG_TELEMETRY,
+    };
+
+    let delta = CompactDeltaPayload::new();
+    let mut delta_wire = [0u8; CompactDeltaPayload::BYTE_LEN];
+    delta.serialize(&mut delta_wire).unwrap();
+
+    let mut out_frame = [0u8; PHY_MTU];
+    let frame_len = assemble_variable_phy_frame(&mhr, &header, &delta_wire, &mut out_frame).unwrap();
+
+    // 11 (MHR) + 18 (MeshHeader) + 24 (Payload) + 2 (FCS) = 55 bytes
+    assert_eq!(frame_len, 55);
+
+    // Parse back
+    let (parsed_hdr, parsed_payload) = parse_variable_phy_frame(&out_frame[..frame_len]).unwrap();
+    assert_eq!(parsed_hdr, header);
+    assert_eq!(parsed_payload.len(), 24);
+    let parsed_delta = CompactDeltaPayload::deserialize(parsed_payload).unwrap();
+    assert_eq!(parsed_delta, delta);
+
+    // Static beacon assembly
+    let mut static_hdr = header;
+    static_hdr.flags = FLAG_TELEMETRY_STATIC;
+    let beacon = StaticMetadataBeacon::new();
+    let mut beacon_wire = [0u8; StaticMetadataBeacon::BYTE_LEN];
+    beacon.serialize(&mut beacon_wire).unwrap();
+
+    let static_len = assemble_variable_phy_frame(&mhr, &static_hdr, &beacon_wire, &mut out_frame).unwrap();
+    // 11 + 18 + 28 + 2 = 59 bytes
+    assert_eq!(static_len, 59);
+
+    let (parsed_static_hdr, parsed_static_payload) = parse_variable_phy_frame(&out_frame[..static_len]).unwrap();
+    assert_eq!(parsed_static_hdr.flags, FLAG_TELEMETRY_STATIC);
+    assert_eq!(parsed_static_payload.len(), 28);
+    let parsed_beacon = StaticMetadataBeacon::deserialize(parsed_static_payload).unwrap();
+    assert_eq!(parsed_beacon, beacon);
+
+    // Defensive parsing: truncated frame
+    assert_eq!(parse_variable_phy_frame(&out_frame[..20]), Err(FramingError::BufferTooShort));
+
+    // Defensive parsing: invalid network tag
+    let mut corrupt_frame = out_frame;
+    corrupt_frame[11..19].copy_from_slice(&0xDEADBEEF_u64.to_be_bytes());
+    assert_eq!(parse_variable_phy_frame(&corrupt_frame[..static_len]), Err(FramingError::InvalidNetworkTag));
+}
+
+#[test]
+fn test_cdc_frame_encode_decode_and_crc_resync() {
+    let payload = b"Gibberish Closed Telemetry Binary Payload";
+    let mut cdc_buf = [0u8; 128];
+    let encoded_len = encode_cdc_frame(payload, &mut cdc_buf).unwrap();
+
+    assert_eq!(encoded_len, CDC_HEADER_LEN + payload.len());
+    assert_eq!(&cdc_buf[0..2], &CDC_FRAME_MAGIC);
+
+    // Decode clean frame
+    let res = decode_cdc_frame(&cdc_buf[..encoded_len]).unwrap();
+    assert!(res.is_some());
+    let (consumed, decoded_payload) = res.unwrap();
+    assert_eq!(consumed, encoded_len);
+    assert_eq!(decoded_payload, payload);
+
+    // Test corrupted CRC
+    let mut corrupt_buf = cdc_buf;
+    corrupt_buf[5] ^= 0xFF; // Invalidate CRC
+    assert_eq!(decode_cdc_frame(&corrupt_buf[..encoded_len]), Err(FramingError::CrcMismatch));
+
+    // Test corrupted Magic
+    corrupt_buf[0] = 0x00;
+    assert_eq!(decode_cdc_frame(&corrupt_buf[..encoded_len]), Err(FramingError::MagicMismatch));
+
+    // Test incomplete frame (waiting for more bytes)
+    assert_eq!(decode_cdc_frame(&cdc_buf[..encoded_len - 5]), Ok(None));
+}
+
+#[test]
+fn test_non_preemptible_phy_window_derivation() {
+    let total_phy_bytes: u32 = 6 + 127;
+    let total_bits: u32 = total_phy_bytes * 8;
+    let total_symbols: u32 = total_bits / 4;
+
+    let duration_us = total_symbols * 16;
+    assert_eq!(duration_us, 4256);
+
+    let duration_ms = duration_us as f64 / 1000.0;
+    assert!((duration_ms - 4.256).abs() < 1e-6);
+    assert!(duration_ms <= 4.256);
+
+    let delta_phy_bytes: u32 = 6 + 55;
+    let delta_bits: u32 = delta_phy_bytes * 8;
+    let delta_symbols: u32 = delta_bits / 4;
+    let delta_duration_us: u32 = delta_symbols * 16;
+    assert_eq!(delta_duration_us, 1952);
+
+    let static_phy_bytes: u32 = 6 + 59;
+    let static_bits: u32 = static_phy_bytes * 8;
+    let static_symbols: u32 = static_bits / 4;
+    let static_duration_us: u32 = static_symbols * 16;
+    assert_eq!(static_duration_us, 2080);
+
+    let psdu_reduction_pct = (127.0 - 55.0) / 127.0 * 100.0;
+    assert!(psdu_reduction_pct > 56.0);
+    let payload_reduction_pct = (96.0 - 24.0) / 96.0 * 100.0;
+    assert_eq!(payload_reduction_pct, 75.0);
 }
 
 

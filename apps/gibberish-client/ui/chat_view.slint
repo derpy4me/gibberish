@@ -1,0 +1,351 @@
+import { ListView } from "std-widgets.slint";
+
+export struct ChatMessageItem {
+    id: string,
+    convo_id: string,
+    sender: string,
+    text: string,
+    timestamp: string,
+    status: string, // "*", "[OK]", "[Q]", "[!]"
+    is_outgoing: bool,
+    sender_color: color,
+}
+
+export component ChatView inherits Rectangle {
+    in property <[ChatMessageItem]> messages: [];
+    in property <string> active_convo_id: "#all";
+    in property <string> active_alias: "Swarm Broadcast";
+    in property <string> trust_state: "verified"; // "unverified", "verified"
+    callback send_message(string);
+    callback open_verify(string);
+
+    forward-focus: input_box;
+
+    background: #0e1420;
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 8px;
+
+        // Header Panel
+        Rectangle {
+            height: 44px;
+            background: #111827;
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: #1e293b;
+
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 8px;
+                alignment: space-between;
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: start;
+
+                    Text {
+                        text: active_convo_id == "#all" ? "#all (Swarm Broadcast)" : (active_alias != "" ? active_alias : active_convo_id);
+                        color: #f1f5f9;
+                        font-size: 13px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+
+                    if active_convo_id != "#all": Rectangle {
+                        width: trust_state == "verified" ? 100px : 160px;
+                        height: 24px;
+                        background: trust_state == "verified" ? #064e3b : #451a03;
+                        border-radius: 3px;
+                        border-width: 1px;
+                        border-color: trust_state == "verified" ? #10b981 : #f59e0b;
+
+                        Text {
+                            text: trust_state == "verified" ? "[✓ VERIFIED]" : "[? UNVERIFIED CONTACT]";
+                            color: trust_state == "verified" ? #10b981 : #f59e0b;
+                            font-size: 10px;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                if active_convo_id != "#all" && trust_state != "verified": Rectangle {
+                    width: 130px;
+                    height: 28px;
+                    background: #f59e0b;
+                    border-radius: 3px;
+
+                    TouchArea {
+                        clicked => { root.open_verify(root.active_convo_id); }
+                    }
+
+                    Text {
+                        text: "VERIFY IDENTITY";
+                        color: #080b11;
+                        font-size: 10px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // Caution Banner for Unverified Direct Chat
+        if active_convo_id != "#all" && trust_state == "unverified": Rectangle {
+            height: 28px;
+            background: #201205;
+            border-radius: 3px;
+            border-width: 1px;
+            border-color: #78350f;
+
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                alignment: center;
+
+                Text {
+                    text: "[!] CAUTION: Station identity unverified. Compare 4-word SAS string out-of-band.";
+                    color: #fde68a;
+                    font-size: 10px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Messages List (Tactical Monospace Asymmetric Full-Width Rule Layout)
+        ListView {
+            for msg in messages: Rectangle {
+                background: transparent;
+
+                VerticalLayout {
+                    padding-top: 6px;
+                    padding-bottom: 6px;
+                    spacing: 4px;
+
+                    // Full-Width Rule Header Line
+                    if !msg.is_outgoing: HorizontalLayout {
+                        spacing: 6px;
+                        vertical-stretch: 0;
+
+                        Text {
+                            text: "──";
+                            color: #4b586b;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: "[" + msg.timestamp + "]";
+                            color: #8b9ab0;
+                            font-size: 11px;
+                            font-weight: 500;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: "<" + msg.sender + ">";
+                            color: msg.sender_color;
+                            font-size: 11px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+
+                        // Full-width horizontal rule line extending to right edge
+                        Rectangle {
+                            height: 1px;
+                            background: #27354a;
+                            horizontal-stretch: 1;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+
+                    if msg.is_outgoing: HorizontalLayout {
+                        spacing: 6px;
+                        vertical-stretch: 0;
+
+                        // Full-width horizontal rule line extending from left edge
+                        Rectangle {
+                            height: 1px;
+                            background: #27354a;
+                            horizontal-stretch: 1;
+                            y: (parent.height - self.height) / 2;
+                        }
+
+                        Text {
+                            text: "<" + msg.sender + ">";
+                            color: #38bdf8;
+                            font-size: 11px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: "[" + msg.timestamp + "]";
+                            color: #8b9ab0;
+                            font-size: 11px;
+                            font-weight: 500;
+                            vertical-alignment: center;
+                        }
+
+                        if msg.status != "": Text {
+                            text: msg.status;
+                            color: msg.status == "[OK]" ? #10b981 : (msg.status == "[!]" ? #ef4444 : #f59e0b);
+                            font-size: 11px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: "──";
+                            color: #4b586b;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    // Message Body Text (Canvas Direct, Zero Bubbles, Asymmetric Gutters)
+                    if !msg.is_outgoing: HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 60px;
+                        spacing: 8px;
+
+                        Rectangle {
+                            width: 2px;
+                            background: msg.sender_color;
+                        }
+
+                        Text {
+                            text: msg.text;
+                            color: #f1f5f9;
+                            font-size: 12px;
+                            font-weight: 500;
+                            horizontal-stretch: 1;
+                            wrap: word-wrap;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    if msg.is_outgoing: HorizontalLayout {
+                        padding-left: 60px;
+                        padding-right: 12px;
+                        spacing: 8px;
+
+                        Text {
+                            text: msg.text;
+                            color: #7dd3fc;
+                            font-size: 12px;
+                            font-weight: 500;
+                            horizontal-alignment: right;
+                            horizontal-stretch: 1;
+                            wrap: word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            width: 2px;
+                            background: #38bdf8;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Input Box Container
+        input_container := Rectangle {
+            height: 42px;
+            background: #090d16;
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: input_box.has-focus ? #38bdf8 : #1e293b;
+
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 6px;
+                padding-top: 4px;
+                padding-bottom: 4px;
+                spacing: 8px;
+
+                // Input Field Wrapper
+                Rectangle {
+                    horizontal-stretch: 1;
+                    clip: true;
+
+                    // Placeholder text
+                    if input_box.text == "" && !input_box.has-focus : Text {
+                        x: 0px;
+                        width: 100%;
+                        text: "Type a message... (Press Enter to send)";
+                        color: #64748b;
+                        font-size: 12px;
+                        font-family: "JetBrains Mono";
+                        horizontal-alignment: left;
+                        vertical-alignment: center;
+                    }
+
+                    input_box := TextInput {
+                        property <length> computed-x: 0px;
+
+                        x: min(0px, max(parent.width - self.width - self.text-cursor-width, self.computed-x));
+                        width: max(parent.width - self.text-cursor-width, self.preferred-width);
+                        height: 100%;
+                        color: #f1f5f9;
+                        font-size: 12px;
+                        font-family: "JetBrains Mono";
+                        single-line: true;
+                        horizontal-alignment: left;
+                        vertical-alignment: center;
+
+                        cursor-position-changed(pos) => {
+                            if pos.x + self.computed-x < 0px {
+                                self.computed-x = - pos.x;
+                            } else if pos.x + self.computed-x > parent.width - self.text-cursor-width {
+                                self.computed-x = parent.width - pos.x - self.text-cursor-width;
+                            }
+                        }
+
+                        accepted => {
+                            if (self.text != "") {
+                                root.send_message(self.text);
+                                self.text = "";
+                                self.computed-x = 0px;
+                            }
+                        }
+                    }
+                }
+
+                // Send Button
+                send_btn := Rectangle {
+                    width: 88px;
+                    height: 32px;
+                    background: send_touch.pressed ? #1d4ed8 : (send_touch.has-hover ? #3b82f6 : #2563eb);
+                    border-radius: 3px;
+
+                    send_touch := TouchArea {
+                        clicked => {
+                            if (input_box.text != "") {
+                                root.send_message(input_box.text);
+                                input_box.text = "";
+                                input_box.computed-x = 0px;
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: "SEND [↵]";
+                        color: #ffffff;
+                        font-size: 11px;
+                        font-weight: 700;
+                        font-family: "JetBrains Mono";
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}
