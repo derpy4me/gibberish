@@ -19,6 +19,7 @@ pub struct ReceivedWirePacket {
 pub struct SerialTransport {
     port: Box<dyn SerialPort>,
     read_buf: Vec<u8>,
+    pub detected_node_id: Option<u32>,
 }
 
 impl SerialTransport {
@@ -31,6 +32,7 @@ impl SerialTransport {
         Ok(Self {
             port,
             read_buf: Vec::with_capacity(DONGLE_TO_HOST_LINE_LIMIT),
+            detected_node_id: None,
         })
     }
 
@@ -97,14 +99,21 @@ impl SerialTransport {
 
                         let (pkts, telems, log_lines) = parse_cdc_stream_sliding_window(&mut self.read_buf);
                         packets.extend(pkts);
+                        for line in &log_lines {
+                            if let Some(id) = parse_dongle_node_id(line) {
+                                self.detected_node_id = Some(id);
+                            }
+                        }
                         logs.extend(log_lines);
                         for telem in telems {
                             let storage_str = match telem.storage_mode {
                                 gibberish_protocol::StorageModeStatus::MicroSdActive => "SD ACTIVE",
                                 gibberish_protocol::StorageModeStatus::RamOnly => "RAM ONLY",
                             };
+                            let node_hex = format!("{:08X}", self.detected_node_id.unwrap_or(0));
                             logs.push(format!(
-                                "[Telemetry RX] Tier: PROD, Storage: {}, Uptime: {}s, SRAM: {}/256, Drops: {}, RX: {}, TX: {}, RSSI: {} dBm, LQI: 255",
+                                "[Telemetry RX] Node: {}, Tier: PROD, Storage: {}, Uptime: {}s, SRAM: {}/256, Drops: {}, RX: {}, TX: {}, RSSI: {} dBm, LQI: 255",
+                                node_hex,
                                 storage_str,
                                 telem.uptime_secs,
                                 telem.sram_ring_used,

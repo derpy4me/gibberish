@@ -264,9 +264,28 @@ impl FleetManager {
     }
 
     pub fn ingest_line(&mut self, line: &str) -> Option<NodeTelemetry> {
-        if let Some(telemetry) = parse_telemetry_line(line) {
+        if let Some(mut telemetry) = parse_telemetry_line(line) {
+            if let Some(existing) = self.nodes.get_mut(&telemetry.node_id) {
+                if telemetry.uptime_epoch == 0 && existing.uptime_epoch != 0 {
+                    telemetry.uptime_epoch = existing.uptime_epoch;
+                    telemetry.hw_rev = existing.hw_rev;
+                    telemetry.schema_version = existing.schema_version;
+                }
+                if !line.contains("Epoch:") && existing.config_epoch != 0 {
+                    telemetry.config_epoch = existing.config_epoch;
+                }
+                if existing.state != PeerContextState::Active && telemetry.state == PeerContextState::Active {
+                    if line.contains("Epoch:") && line.contains("UptimeEpoch:") {
+                        telemetry.state = PeerContextState::Active;
+                    } else {
+                        telemetry.state = existing.state;
+                    }
+                }
+                *existing = telemetry.clone();
+            } else {
+                self.nodes.insert(telemetry.node_id.clone(), telemetry.clone());
+            }
             self.log_entry(&telemetry);
-            self.nodes.insert(telemetry.node_id.clone(), telemetry.clone());
             Some(telemetry)
         } else {
             None

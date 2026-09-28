@@ -60,9 +60,9 @@ fn main() -> ! {
     // 1. Read Hardware MAC for Node Identification
     let mac = efuse::interface_mac_address(InterfaceMacAddress::Station);
     let mac_bytes = mac.as_bytes();
-    let mut full_mac = [0u8; 8];
-    full_mac[2..8].copy_from_slice(mac_bytes);
     let local_node_id = u32::from_be_bytes([mac_bytes[2], mac_bytes[3], mac_bytes[4], mac_bytes[5]]);
+    let mut full_mac = [0u8; 8];
+    full_mac[4..8].copy_from_slice(&local_node_id.to_be_bytes());
     log_info!("Node ID: {:08X} (MAC: {:02X?})", local_node_id, mac_bytes);
 
     // 2. APA102 DotStar RGB LED (GPIO 4 Clock, GPIO 5 Data)
