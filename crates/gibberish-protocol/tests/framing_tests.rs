@@ -519,3 +519,30 @@ fn test_non_preemptible_phy_window_derivation() {
 
 
 
+
+#[test]
+fn test_mesh_packet_cdc_wire_roundtrip() {
+    assert_eq!(MeshPacket::CDC_WIRE_LEN, 118);
+    let header = MeshHeader {
+        network_tag: DEFAULT_NETWORK_TAG,
+        msg_id: 0x99887766,
+        chunk_idx: 1,
+        total_chunks: 3,
+        ttl: 5,
+        hop_count: 1,
+        flags: FLAG_DIRECT,
+    };
+    let mut payload = [0x5A; CIPHERTEXT_LEN];
+    payload[0] = 0x12;
+    payload[95] = 0x34;
+
+    let packet = MeshPacket { header, payload };
+    let src_node_id = 0xBEBD82B4;
+
+    let mut cdc_wire = [0u8; MeshPacket::CDC_WIRE_LEN];
+    packet.serialize_cdc(src_node_id, &mut cdc_wire);
+
+    let (parsed_src, parsed_pkt) = MeshPacket::deserialize_cdc(&cdc_wire);
+    assert_eq!(parsed_src, src_node_id);
+    assert_eq!(parsed_pkt, packet);
+}

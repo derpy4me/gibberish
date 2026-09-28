@@ -529,9 +529,9 @@ fn main() -> ! {
 
                             #[cfg(not(feature = "debug-telemetry"))]
                             {
-                                let mut wire_buf = [0u8; gibberish_protocol::MeshPacket::WIRE_PAYLOAD_LEN];
-                                packet.serialize_payload(&mut wire_buf);
-                                let mut cdc_buf = [0u8; 128];
+                                let mut wire_buf = [0u8; gibberish_protocol::MeshPacket::CDC_WIRE_LEN];
+                                packet.serialize_cdc(rx_frame.src_node_id, &mut wire_buf);
+                                let mut cdc_buf = [0u8; 132];
                                 if let Ok(len) = gibberish_protocol::encode_cdc_frame(&wire_buf, &mut cdc_buf) {
                                     let _ = usb_tx.write(&cdc_buf[..len]);
                                     let _ = usb_tx.flush_tx();

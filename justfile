@@ -29,7 +29,7 @@ logs log="/tmp/gibberish/daemon.log":
 
 # Flash production firmware to C5 dongle (default release is production; auto-detects port if not specified)
 flash port="":
-    cd apps/gibberish-firmware && espflash flash {{ if port != "" { "--port " + port } else { "" } }} --release
+    cd apps/gibberish-firmware && cargo build --release && espflash flash {{ if port != "" { "--port " + port } else { "" } }} target/riscv32imac-unknown-none-elf/release/gibberish-firmware
 
 # Build firmware with debug telemetry profile (5s unencrypted beacon)
 build-debug:
@@ -45,13 +45,13 @@ build-firmware-prod: build-prod
 
 # Flash debug firmware to C5 dongle (auto-detects port if not specified)
 flash-debug port="":
-    cd apps/gibberish-firmware && espflash flash {{ if port != "" { "--port " + port } else { "" } }} --release --features debug-telemetry
+    cd apps/gibberish-firmware && cargo build --release --features debug-telemetry && espflash flash {{ if port != "" { "--port " + port } else { "" } }} target/riscv32imac-unknown-none-elf/release/gibberish-firmware
 
 flash-firmware-debug port="": (flash-debug port)
 
 # Flash production firmware to C5 dongle (auto-detects port if not specified)
 flash-prod port="":
-    cd apps/gibberish-firmware && espflash flash {{ if port != "" { "--port " + port } else { "" } }} --release
+    cd apps/gibberish-firmware && cargo build --release && espflash flash {{ if port != "" { "--port " + port } else { "" } }} target/riscv32imac-unknown-none-elf/release/gibberish-firmware
 
 flash-firmware-prod port="": (flash-prod port)
 
@@ -70,6 +70,10 @@ test-host:
 # Run multi-node mesh swarm simulation
 test-sim:
     cargo run -p integration-sim
+
+# Run physical over-the-air RF mesh verification between attached dongles
+ota-mesh:
+    cargo run --release -p gibberish-daemon --bin ota_mesh_test
 
 # Check security guardrails (deny crypto in firmware)
 check-deny:

@@ -117,6 +117,7 @@ pub struct MeshPacket {
 
 impl MeshPacket {
     pub const WIRE_PAYLOAD_LEN: usize = MESH_HEADER_LEN + CIPHERTEXT_LEN; // 114
+    pub const CDC_WIRE_LEN: usize = 4 + Self::WIRE_PAYLOAD_LEN; // 118: 4B src_node_id + 114B wire payload
 
     pub fn serialize_payload(&self, out: &mut [u8; Self::WIRE_PAYLOAD_LEN]) {
         let mut hdr_buf = [0u8; MESH_HEADER_LEN];
@@ -132,6 +133,21 @@ impl MeshPacket {
         let mut payload = [0u8; CIPHERTEXT_LEN];
         payload.copy_from_slice(&buf[MESH_HEADER_LEN..Self::WIRE_PAYLOAD_LEN]);
         Self { header, payload }
+    }
+
+    /// Serializes packet preceded by 4-byte 802.15.4 transmitter node ID for host USB CDC forwarding.
+    pub fn serialize_cdc(&self, src_node_id: u32, out: &mut [u8; Self::CDC_WIRE_LEN]) {
+        out[0..4].copy_from_slice(&src_node_id.to_be_bytes());
+        let wire_slice: &mut [u8; Self::WIRE_PAYLOAD_LEN] = (&mut out[4..Self::CDC_WIRE_LEN]).try_into().unwrap();
+        self.serialize_payload(wire_slice);
+    }
+
+    /// Deserializes a CDC forwarded packet, returning (src_node_id, MeshPacket).
+    pub fn deserialize_cdc(buf: &[u8; Self::CDC_WIRE_LEN]) -> (u32, Self) {
+        let src_node_id = u32::from_be_bytes(buf[0..4].try_into().unwrap());
+        let wire_slice: &[u8; Self::WIRE_PAYLOAD_LEN] = buf[4..Self::CDC_WIRE_LEN].try_into().unwrap();
+        let packet = Self::deserialize_payload(wire_slice);
+        (src_node_id, packet)
     }
 
     pub fn matches_tag(&self, expected_tag: u64) -> bool {

@@ -161,7 +161,14 @@ pub fn parse_cdc_stream_sliding_window(
         if read_buf.len() >= 2 && read_buf[0..2] == CDC_FRAME_MAGIC {
             match decode_cdc_frame(read_buf) {
                 Ok(Some((consumed, payload))) => {
-                    if payload.len() == MeshPacket::WIRE_PAYLOAD_LEN {
+                    if payload.len() == MeshPacket::CDC_WIRE_LEN {
+                        let (src_node_id, pkt) =
+                            MeshPacket::deserialize_cdc(payload.try_into().unwrap());
+                        packets.push(ReceivedWirePacket {
+                            src_node_id,
+                            packet: pkt,
+                        });
+                    } else if payload.len() == MeshPacket::WIRE_PAYLOAD_LEN {
                         let pkt = MeshPacket::deserialize_payload(payload.try_into().unwrap());
                         packets.push(ReceivedWirePacket {
                             src_node_id: 0,
@@ -445,5 +452,55 @@ pub mod tests {
         assert!(stream_corrupt.is_empty());
         assert_eq!(telems.len(), 1);
         assert_eq!(telems[0].uptime_secs, 1234);
+    }
+
+    #[test]
+    fn test_framed_mesh_packet_cdc_validation() {
+        use gibberish_protocol::{encode_cdc_frame, MeshHeader, MeshPacket, DEFAULT_NETWORK_TAG, FLAG_DIRECT};
+
+        let hdr = MeshHeader {
+            network_tag: DEFAULT_NETWORK_TAG,
+            msg_id: 0x12345678,
+            chunk_idx: 0,
+            total_chunks: 1,
+            ttl: 3,
+            hop_count: 0,
+            flags: FLAG_DIRECT,
+        };
+        let packet = MeshPacket {
+            header: hdr,
+            payload: [0x77; 96],
+        };
+        let src_node_id = 0xBEBD82B4;
+
+        // 1. Test 118-byte CDC frame with src_node_id
+        let mut cdc_wire = [0u8; MeshPacket::CDC_WIRE_LEN];
+        packet.serialize_cdc(src_node_id, &mut cdc_wire);
+
+        let mut framed = [0u8; 132];
+        let framed_len = encode_cdc_frame(&cdc_wire, &mut framed).unwrap();
+
+        let mut buf = framed[..framed_len].to_vec();
+        let (pkts, telems, _logs) = parse_cdc_stream_sliding_window(&mut buf);
+        assert!(buf.is_empty());
+        assert_eq!(pkts.len(), 1);
+        assert_eq!(telems.len(), 0);
+        assert_eq!(pkts[0].src_node_id, src_node_id);
+        assert_eq!(pkts[0].packet, packet);
+
+        // 2. Test 114-byte legacy CDC frame without src_node_id
+        let mut wire_legacy = [0u8; MeshPacket::WIRE_PAYLOAD_LEN];
+        packet.serialize_payload(&mut wire_legacy);
+
+        let mut framed_legacy = [0u8; 132];
+        let legacy_len = encode_cdc_frame(&wire_legacy, &mut framed_legacy).unwrap();
+
+        let mut buf_legacy = framed_legacy[..legacy_len].to_vec();
+        let (pkts2, telems2, _logs2) = parse_cdc_stream_sliding_window(&mut buf_legacy);
+        assert!(buf_legacy.is_empty());
+        assert_eq!(pkts2.len(), 1);
+        assert_eq!(telems2.len(), 0);
+        assert_eq!(pkts2[0].src_node_id, 0);
+        assert_eq!(pkts2[0].packet, packet);
     }
 }
