@@ -16,8 +16,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(" With Asymmetric Framing, HKDF Subkeys, & Chunk Reassembly  ");
     println!("============================================================\n");
 
-    let port_a_path = "/dev/ttyACM1"; // Dongle A: Node BEBCE5B8 (SD Node)
-    let port_b_path = "/dev/ttyACM0"; // Dongle B: Node BEBD82B4 (RAM Node)
+    let port_a_path = "/dev/ttyACM0"; // Dongle A: Node BEBCE5B8 (ACM0)
+    let port_b_path = "/dev/ttyACM1"; // Dongle B: Node BEBD82B4 (ACM1)
 
     let node_a_id = 0xBEBCE5B8u32;
     let node_b_id = 0xBEBD82B4u32;

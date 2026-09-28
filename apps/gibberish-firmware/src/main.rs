@@ -211,7 +211,7 @@ fn main() -> ! {
     };
     let mut static_elapsed_ms: u32 = 0;
     let mut next_static_interval_ms: u32 = calc_next_static_interval(&hw_rng);
-    let mut force_static_beacon = false;
+    let mut force_static_beacon = true; // Send initial static beacon on boot so peers discover this node immediately
 
     log_info!("Gibberish firmware initialization complete. Starting main loop.\n");
 

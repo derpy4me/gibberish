@@ -10,7 +10,6 @@ use gibberish_protocol::{
     FLAG_TELEMETRY_STATIC, MESH_HEADER_LEN, MHR_LEN, FCS_LEN,
 };
 use std::fs;
-use std::io::Read;
 use std::path::Path;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -248,55 +247,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Phase 3: Live Hardware Transceiver Probe (if physical dongles attached)
     // -------------------------------------------------------------------------
     println!("\n[Phase 3] Probing Physical Hardware Dongles (/dev/ttyACM0, /dev/ttyACM1)...");
-    let port_a_res = serialport::new("/dev/ttyACM0", 115_200)
-        .timeout(Duration::from_millis(200))
-        .open();
-    let port_b_res = serialport::new("/dev/ttyACM1", 115_200)
-        .timeout(Duration::from_millis(200))
-        .open();
+    let mut transport_a_res = gibberish_daemon::transport::SerialTransport::open("/dev/ttyACM0");
+    let mut transport_b_res = gibberish_daemon::transport::SerialTransport::open("/dev/ttyACM1");
 
-    match (port_a_res, port_b_res) {
-        (Ok(mut port_a), Ok(mut port_b)) => {
+    match (transport_a_res.as_mut(), transport_b_res.as_mut()) {
+        (Ok(ta), Ok(tb)) => {
             println!("    ✓ Connected to Dongle A (/dev/ttyACM0) and Dongle B (/dev/ttyACM1)");
 
             // Drain existing boot/debug logs
-            let mut drain_buf = [0u8; 1024];
-            while port_a.read(&mut drain_buf).unwrap_or(0) > 0 {}
-            while port_b.read(&mut drain_buf).unwrap_or(0) > 0 {}
+            sleep(Duration::from_millis(400));
+            let _ = ta.poll_stream();
+            let _ = tb.poll_stream();
 
-            println!("    Listening for physical 802.15.4 telemetry emissions (up to 7 seconds)...");
+            println!("    Listening for physical 802.15.4 telemetry emissions (up to 15 seconds)...");
             let start = Instant::now();
             let mut received_telemetry = false;
-            let mut rx_buf = Vec::new();
 
-            while start.elapsed() < Duration::from_secs(7) && !received_telemetry {
-                sleep(Duration::from_millis(50));
-                let mut chunk = [0u8; 512];
-                if let Ok(n) = port_a.read(&mut chunk) {
-                    if n > 0 {
-                        rx_buf.extend_from_slice(&chunk[..n]);
-                        if let Ok(s) = std::str::from_utf8(&rx_buf) {
-                            for line in s.lines() {
-                                if let Some(t) = parse_telemetry_line(line) {
-                                    println!("    ✓ Over-the-air Telemetry captured from Node {} (RSSI: {} dBm, Uptime: {}s)", t.node_id, t.rssi, t.uptime_secs);
-                                    received_telemetry = true;
-                                    break;
-                                }
-                            }
-                        }
+            while start.elapsed() < Duration::from_secs(15) && !received_telemetry {
+                sleep(Duration::from_millis(100));
+                let (_, logs_a) = ta.poll_stream();
+                for line in logs_a {
+                    if let Some(t) = parse_telemetry_line(&line) {
+                        println!("    ✓ [Dongle A] Captured Telemetry from Node {} (RSSI: {} dBm, Uptime: {}s, Tier: {})", t.node_id, t.rssi, t.uptime_secs, t.tier);
+                        received_telemetry = true;
+                        break;
+                    }
+                }
+                let (_, logs_b) = tb.poll_stream();
+                for line in logs_b {
+                    if let Some(t) = parse_telemetry_line(&line) {
+                        println!("    ✓ [Dongle B] Captured Telemetry from Node {} (RSSI: {} dBm, Uptime: {}s, Tier: {})", t.node_id, t.rssi, t.uptime_secs, t.tier);
+                        received_telemetry = true;
+                        break;
                     }
                 }
             }
 
             if !received_telemetry {
-                println!("    Notice: No telemetry packet captured within 7s window (nodes may be flashing or idle).");
+                println!("    Notice: No telemetry packet captured within 15s window (nodes may need flashing or are in backoff).");
             }
         }
-        (port_a, port_b) => {
+        (ta, tb) => {
             println!(
                 "    Notice: Physical hardware not fully accessible (Port A: {}, Port B: {}).",
-                if port_a.is_ok() { "Available" } else { "Unavailable" },
-                if port_b.is_ok() { "Available" } else { "Unavailable" }
+                if ta.is_ok() { "Available" } else { "Unavailable" },
+                if tb.is_ok() { "Available" } else { "Unavailable" }
             );
             println!("    Mock and software verification suites passed successfully.");
         }
