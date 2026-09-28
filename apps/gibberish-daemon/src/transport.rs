@@ -194,25 +194,23 @@ pub fn parse_cdc_stream_sliding_window(
             {
                 if magic_pos > 0 {
                     let line_bytes: Vec<u8> = read_buf.drain(..magic_pos).collect();
-                    if let Ok(s) = std::str::from_utf8(&line_bytes) {
-                        let trimmed = s.trim();
-                        if !trimmed.is_empty() {
-                            logs.push(trimmed.to_string());
-                        }
+                    let s = String::from_utf8_lossy(&line_bytes);
+                    let trimmed = s.trim();
+                    if !trimmed.is_empty() {
+                        logs.push(trimmed.to_string());
                     }
                 }
                 continue;
             }
 
             let line_bytes: Vec<u8> = read_buf.drain(..=nl_pos).collect();
-            if let Ok(s) = std::str::from_utf8(&line_bytes) {
-                let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    if let Some(wire_pkt) = parse_pkt_line(trimmed) {
-                        packets.push(wire_pkt);
-                    } else {
-                        logs.push(trimmed.to_string());
-                    }
+            let s = String::from_utf8_lossy(&line_bytes);
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                if let Some(wire_pkt) = parse_pkt_line(trimmed) {
+                    packets.push(wire_pkt);
+                } else {
+                    logs.push(trimmed.to_string());
                 }
             }
             continue;
@@ -222,11 +220,10 @@ pub fn parse_cdc_stream_sliding_window(
         if let Some(magic_pos) = read_buf.windows(2).position(|w| w == CDC_FRAME_MAGIC) {
             if magic_pos > 0 {
                 let text_bytes: Vec<u8> = read_buf.drain(..magic_pos).collect();
-                if let Ok(s) = std::str::from_utf8(&text_bytes) {
-                    let trimmed = s.trim();
-                    if !trimmed.is_empty() {
-                        logs.push(trimmed.to_string());
-                    }
+                let s = String::from_utf8_lossy(&text_bytes);
+                let trimmed = s.trim();
+                if !trimmed.is_empty() {
+                    logs.push(trimmed.to_string());
                 }
             }
             continue;
