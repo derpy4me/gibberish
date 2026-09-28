@@ -1,10 +1,21 @@
 //! In-memory fleet tracking, telemetry line parsing, and live ANSI TUI dashboard (R9, R10).
 
+use gibberish_protocol::{
+    compare_epoch, CompactDeltaPayload, DiagnosticEventCode, EpochComparison,
+    StaticMetadataBeacon, StorageModeStatus, TelemetryTier,
+};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerContextState {
+    Active,
+    PendingContext { first_seen_secs: u64 },
+    AmbiguousEpoch { detected_secs: u64 },
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeTelemetry {
@@ -18,6 +29,14 @@ pub struct NodeTelemetry {
     pub rssi: i8,
     pub lqi: u8,
     pub last_seen: Instant,
+    pub state: PeerContextState,
+    pub config_epoch: u8,
+    pub uptime_epoch: u16,
+    pub hw_rev: u8,
+    pub schema_version: u8,
+    pub sram_used: u16,
+    pub free_heap_kb: u8,
+    pub last_event: DiagnosticEventCode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +123,11 @@ pub fn parse_telemetry_line(line: &str) -> Option<NodeTelemetry> {
     let mut drop_count = 0u32;
     let mut rssi = -50i8;
     let mut lqi = 255u8;
+    let mut config_epoch = 1u8;
+    let mut uptime_epoch = 0u16;
+    let mut sram_used = 0u16;
+    let free_heap_kb = 0u8;
+    let last_event = DiagnosticEventCode::RadioRxOk;
 
     // Parse comma-separated or key-value segments from content: Key: Value
     for part in content.split(',') {
@@ -157,6 +181,19 @@ pub fn parse_telemetry_line(line: &str) -> Option<NodeTelemetry> {
                 if let Ok(n) = num_str.parse::<u8>() {
                     lqi = n;
                 }
+            } else if key == "Epoch" {
+                if let Ok(n) = val.parse::<u8>() {
+                    config_epoch = n;
+                }
+            } else if key == "UptimeEpoch" {
+                if let Ok(n) = val.parse::<u16>() {
+                    uptime_epoch = n;
+                }
+            } else if key == "SRAM" {
+                let num_str = val.split('/').next().unwrap_or("").trim();
+                if let Ok(n) = num_str.parse::<u16>() {
+                    sram_used = n;
+                }
             }
         } else if node_id.is_empty() {
             // Alternative prefix format: e.g. "Telemetry from: BEBCE5B8"
@@ -182,6 +219,14 @@ pub fn parse_telemetry_line(line: &str) -> Option<NodeTelemetry> {
         rssi,
         lqi,
         last_seen: Instant::now(),
+        state: PeerContextState::Active,
+        config_epoch,
+        uptime_epoch,
+        hw_rev: 1,
+        schema_version: 1,
+        sram_used,
+        free_heap_kb,
+        last_event,
     })
 }
 
@@ -228,6 +273,158 @@ impl FleetManager {
         }
     }
 
+    pub fn ingest_delta(
+        &mut self,
+        src_node_id: u32,
+        delta: &CompactDeltaPayload,
+        rssi: i8,
+        lqi: u8,
+    ) -> NodeTelemetry {
+        let node_id_str = format!("{:08X}", src_node_id);
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        if let Some(existing) = self.nodes.get_mut(&node_id_str) {
+            existing.uptime_secs = delta.uptime_secs;
+            existing.rx_count = delta.rx_count;
+            existing.tx_count = delta.tx_count;
+            existing.drop_count = delta.drop_count;
+            existing.sram_used = delta.sram_used;
+            existing.free_heap_kb = delta.free_heap_kb;
+            existing.last_event = delta.last_event;
+            existing.rssi = rssi;
+            existing.lqi = lqi;
+            existing.last_seen = Instant::now();
+
+            if delta.config_epoch != existing.config_epoch {
+                match compare_epoch(delta.config_epoch, existing.config_epoch) {
+                    EpochComparison::Newer => {
+                        existing.config_epoch = delta.config_epoch;
+                        existing.state = PeerContextState::PendingContext {
+                            first_seen_secs: now_secs,
+                        };
+                    }
+                    EpochComparison::Ambiguous => {
+                        existing.state = PeerContextState::AmbiguousEpoch {
+                            detected_secs: now_secs,
+                        };
+                    }
+                    _ => {}
+                }
+            }
+
+            let ret = existing.clone();
+            self.log_entry(&ret);
+            ret
+        } else {
+            let telem = NodeTelemetry {
+                node_id: node_id_str.clone(),
+                tier: "PROD".to_string(),
+                storage_mode: "SD ACTIVE".to_string(),
+                uptime_secs: delta.uptime_secs,
+                rx_count: delta.rx_count,
+                tx_count: delta.tx_count,
+                drop_count: delta.drop_count,
+                rssi,
+                lqi,
+                last_seen: Instant::now(),
+                state: PeerContextState::PendingContext {
+                    first_seen_secs: now_secs,
+                },
+                config_epoch: delta.config_epoch,
+                uptime_epoch: 0,
+                hw_rev: 1,
+                schema_version: 1,
+                sram_used: delta.sram_used,
+                free_heap_kb: delta.free_heap_kb,
+                last_event: delta.last_event,
+            };
+            self.log_entry(&telem);
+            self.nodes.insert(node_id_str, telem.clone());
+            telem
+        }
+    }
+
+    pub fn ingest_static_beacon(
+        &mut self,
+        beacon: &StaticMetadataBeacon,
+        rssi: i8,
+        lqi: u8,
+    ) -> NodeTelemetry {
+        let node_id_str = format!("{:08X}", beacon.node_id_u32());
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let tier_str = match beacon.build_tier {
+            TelemetryTier::Prod => "PROD",
+            TelemetryTier::Debug => "DEBUG",
+        }.to_string();
+
+        let storage_str = match beacon.storage_mode {
+            StorageModeStatus::MicroSdActive => "SD ACTIVE",
+            StorageModeStatus::RamOnly => "RAM ONLY",
+        }.to_string();
+
+        if let Some(existing) = self.nodes.get_mut(&node_id_str) {
+            existing.tier = tier_str;
+            existing.storage_mode = storage_str;
+            existing.uptime_epoch = beacon.uptime_epoch;
+            existing.hw_rev = beacon.hw_rev;
+            existing.schema_version = beacon.schema_version;
+            existing.rssi = rssi;
+            existing.lqi = lqi;
+            existing.last_seen = Instant::now();
+
+            match compare_epoch(beacon.config_epoch, existing.config_epoch) {
+                EpochComparison::Newer => {
+                    existing.config_epoch = beacon.config_epoch;
+                    existing.state = PeerContextState::Active;
+                }
+                EpochComparison::Equal => {
+                    existing.state = PeerContextState::Active;
+                }
+                EpochComparison::Ambiguous => {
+                    existing.state = PeerContextState::AmbiguousEpoch {
+                        detected_secs: now_secs,
+                    };
+                }
+                EpochComparison::Older => {}
+            }
+
+            let ret = existing.clone();
+            self.log_entry(&ret);
+            ret
+        } else {
+            let telem = NodeTelemetry {
+                node_id: node_id_str.clone(),
+                tier: tier_str,
+                storage_mode: storage_str,
+                uptime_secs: 0,
+                rx_count: 0,
+                tx_count: 0,
+                drop_count: 0,
+                rssi,
+                lqi,
+                last_seen: Instant::now(),
+                state: PeerContextState::Active,
+                config_epoch: beacon.config_epoch,
+                uptime_epoch: beacon.uptime_epoch,
+                hw_rev: beacon.hw_rev,
+                schema_version: beacon.schema_version,
+                sram_used: 0,
+                free_heap_kb: 0,
+                last_event: DiagnosticEventCode::Boot,
+            };
+            self.log_entry(&telem);
+            self.nodes.insert(node_id_str, telem.clone());
+            telem
+        }
+    }
+
     pub fn log_entry(&mut self, t: &NodeTelemetry) {
         if let Some(ref mut f) = self.log_file {
             let now = SystemTime::now()
@@ -264,7 +461,7 @@ impl FleetManager {
         out.push_str(" PROJECT GIBBERISH - 802.15.4 OFF-GRID FLEET SINK\n");
         out.push_str(&format!(" Listening on: {} | Logging to: {}\n", ports_str, self.log_path.display()));
         out.push_str(&format!("\x1B[1;36m{}\x1B[0m\n", border));
-        out.push_str("\x1B[1mNODE ID   TIER   STORAGE     UPTIME     RX    TX   DROPS  RSSI   LQI  LAST SEEN\x1B[0m\n");
+        out.push_str("\x1B[1mNODE ID   STATUS         TIER   STORAGE     UPTIME     RX    TX   DROPS  RSSI   LQI  LAST SEEN\x1B[0m\n");
         out.push_str(&format!("{}\n", divider));
 
         if self.nodes.is_empty() {
@@ -275,6 +472,16 @@ impl FleetManager {
 
             for node in sorted_nodes {
                 let elapsed_secs = node.last_seen.elapsed().as_secs();
+                let status_str = if elapsed_secs > 360 {
+                    "\x1B[31m[STALE]\x1B[0m       "
+                } else {
+                    match node.state {
+                        PeerContextState::Active => "\x1B[32m[Active]\x1B[0m      ",
+                        PeerContextState::PendingContext { .. } => "\x1B[33m[Pending Sync]\x1B[0m",
+                        PeerContextState::AmbiguousEpoch { .. } => "\x1B[31m[AMBIGUOUS]\x1B[0m   ",
+                    }
+                };
+
                 let (color_code, last_seen_str) = if elapsed_secs <= 10 {
                     ("\x1B[32m", format!("{}s ago", elapsed_secs))
                 } else if elapsed_secs <= 30 {
@@ -284,8 +491,9 @@ impl FleetManager {
                 };
 
                 let row = format!(
-                    "{:<8}  {:<5}  {:<10}  {:<8} {:>5} {:>5} {:>7}  {:>4}   {:>3}  {}{:>13}\x1B[0m\n",
+                    "{:<8}  {}  {:<5}  {:<10}  {:<8} {:>5} {:>5} {:>7}  {:>4}   {:>3}  {}{:>13}\x1B[0m\n",
                     node.node_id,
+                    status_str,
                     node.tier,
                     node.storage_mode,
                     Self::format_uptime(node.uptime_secs),
@@ -406,4 +614,106 @@ mod tests {
         assert_eq!(status_ram.storage_stats, "RAM Only | SRAM: 7/256 pkts");
         assert_eq!(status_ram.drop_count, 12);
     }
+
+    #[test]
+    fn test_fleet_late_joiner_pending_context() {
+        let log_path = "/tmp/gibberish_test_fleet_late.log";
+        let mut fleet = FleetManager::new(log_path);
+
+        let mut delta = CompactDeltaPayload::new();
+        delta.uptime_secs = 42;
+        delta.rx_count = 10;
+        delta.tx_count = 5;
+        delta.config_epoch = 3;
+
+        let node_id = 0x11223344;
+        let telem = fleet.ingest_delta(node_id, &delta, -25, 200);
+
+        assert_eq!(telem.node_id, "11223344");
+        assert_eq!(telem.uptime_secs, 42);
+        assert_eq!(telem.config_epoch, 3);
+        match telem.state {
+            PeerContextState::PendingContext { first_seen_secs } => {
+                assert!(first_seen_secs > 0);
+            }
+            _ => panic!("Expected PendingContext state for late joiner delta without beacon"),
+        }
+
+        let dashboard = fleet.render_dashboard(&[]);
+        assert!(dashboard.contains("11223344"));
+        assert!(dashboard.contains("Pending Sync"));
+
+        let _ = fs::remove_file(log_path);
+    }
+
+    #[test]
+    fn test_fleet_beacon_promotes_to_active() {
+        let log_path = "/tmp/gibberish_test_fleet_promote.log";
+        let mut fleet = FleetManager::new(log_path);
+
+        let node_id = 0xAABBCCDD;
+        let mut delta = CompactDeltaPayload::new();
+        delta.uptime_secs = 100;
+        delta.config_epoch = 1;
+        fleet.ingest_delta(node_id, &delta, -30, 180);
+
+        // Verify initially PendingContext
+        let node = fleet.get_node("AABBCCDD").expect("Node should exist");
+        assert!(matches!(node.state, PeerContextState::PendingContext { .. }));
+
+        // Now receive StaticMetadataBeacon with same epoch (or newer)
+        let mut beacon = StaticMetadataBeacon::new();
+        beacon.node_id = [0, 0, 0, 0, 0xAA, 0xBB, 0xCC, 0xDD];
+        beacon.config_epoch = 1;
+        beacon.build_tier = TelemetryTier::Prod;
+        beacon.storage_mode = StorageModeStatus::MicroSdActive;
+        beacon.uptime_epoch = 0;
+
+        let telem = fleet.ingest_static_beacon(&beacon, -28, 190);
+        assert_eq!(telem.node_id, "AABBCCDD");
+        assert_eq!(telem.tier, "PROD");
+        assert_eq!(telem.storage_mode, "SD ACTIVE");
+        assert_eq!(telem.state, PeerContextState::Active);
+
+        let dashboard = fleet.render_dashboard(&[]);
+        assert!(dashboard.contains("AABBCCDD"));
+        assert!(dashboard.contains("Active"));
+
+        let _ = fs::remove_file(log_path);
+    }
+
+    #[test]
+    fn test_fleet_ambiguous_epoch_handling() {
+        let log_path = "/tmp/gibberish_test_fleet_ambiguous.log";
+        let mut fleet = FleetManager::new(log_path);
+
+        let mut beacon = StaticMetadataBeacon::new();
+        beacon.node_id = [0, 0, 0, 0, 0x12, 0x34, 0x56, 0x78];
+        beacon.config_epoch = 10;
+        fleet.ingest_static_beacon(&beacon, -20, 255);
+
+        let node = fleet.get_node("12345678").unwrap();
+        assert_eq!(node.state, PeerContextState::Active);
+        assert_eq!(node.config_epoch, 10);
+
+        // Ingest delta with diff == 128 (10 + 128 = 138)
+        let mut delta = CompactDeltaPayload::new();
+        delta.config_epoch = 138;
+        delta.uptime_secs = 200;
+        let telem = fleet.ingest_delta(0x12345678, &delta, -22, 240);
+
+        match telem.state {
+            PeerContextState::AmbiguousEpoch { detected_secs } => {
+                assert!(detected_secs > 0);
+            }
+            _ => panic!("Expected AmbiguousEpoch state for diff == 128"),
+        }
+
+        let dashboard = fleet.render_dashboard(&[]);
+        assert!(dashboard.contains("12345678"));
+        assert!(dashboard.contains("AMBIGUOUS"));
+
+        let _ = fs::remove_file(log_path);
+    }
 }
+

@@ -1849,6 +1849,7 @@ dependencies = [
  "gibberish-db",
  "gibberish-protocol",
  "log",
+ "postcard",
  "serde",
  "serde_json",
  "serialport",
