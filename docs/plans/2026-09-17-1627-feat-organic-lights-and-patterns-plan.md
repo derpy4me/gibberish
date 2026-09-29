@@ -9,6 +9,13 @@ product_contract_source: "ce-brainstorm"
 execution: "code"
 ---
 
+## Audit corrections (2026-09-29)
+
+> This plan is a historical record. An audit on 2026-09-29 checked its claims against the code. Implementation status: built in /home/tscott/Work/esp32/c5-light-sync (separate repo: 8ee1ffe, 7782175, 92c7a49, e53f103, 8297dfd, 0209c8c, 2792d60); not present in the gibberish repo, per the audit.
+
+- **Claimed:** "ST7735 SPI bus operates at 10 MHz ... 1199 bytes ~960 us" (Assumptions, U4) **Actually:** the built code uses 16 MHz (c5-light-sync `src/main.rs:68`); commit `0209c8c` "bump SPI to 16MHz (latency <860us)".
+- **Unverified:** Definition of Done 5 (worst-case pattern compute <= 50 us, pulse bar <= 1.2 ms, "empirically verified") and R2 "every pattern computes RGB in under 200 us". Only c5-light-sync `ROADMAP.md` quotes numbers (PatternMath max 36 us, PulseBar max 854 us); no raw log.
+
 ## Goal Capsule
 
 - **Objective:** Elevate the visual expressiveness and liveliness of the synchronized LilyGO T-Dongle-C5 devices by replacing repetitive, single-color animations with an expanded roster of 10 rich organic patterns, continuous procedural color generation, and harmonized LCD display feedback.

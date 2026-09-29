@@ -9,6 +9,14 @@ product_contract_source: ce-brainstorm
 execution: code
 ---
 
+## Audit corrections (2026-09-29)
+
+> This plan is a historical record. An audit on 2026-09-29 checked its claims against the code. Implementation status: built in /home/tscott/Work/esp32/c5-light-sync (separate repo, own git history: 549d325, 447e943, 69a15aa, cd6c6ad, 6b50d0b); nothing from this plan exists in the gibberish repo, per the audit.
+
+- **Claimed:** repo-relative paths such as `c5-light-sync/src/...` and `src/core/...` **Actually:** these files live only in the sibling repo /home/tscott/Work/esp32/c5-light-sync, not in gibberish.
+- **Unverified:** "both physical boards ... coordinated random changes every 10-30 s" (U5 / Definition of Done 4-9). Only that repo's `ROADMAP.md` says COMPLETE; no log or capture exists.
+- **Note:** the node ID "derived from factory eFuse MAC" (R2/KTD4) is a design choice for the demo crate and conflicts with the OPSEC plan's R5; do not port it to gibberish.
+
 ## Goal Capsule
 
 - **Objective:** Synchronize dynamic lighting colors and animation patterns between two or more LilyGO T-Dongle-C5 devices over an autonomous, connectionless peer-to-peer radio link with no central coordinator or pairing.

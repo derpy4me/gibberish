@@ -25,6 +25,8 @@ tags:
 
 # ESP32-C5 802.15.4 Multi-Dongle Airwave Echo Suppression and Sub-Second Message ID Deduplication
 
+> Superseded (2026-09-29): host-side echo suppression keyed on MAC-derived source node IDs (and the firmware MAC self-discard) depend on MAC bytes in every frame, which production frames may no longer carry. See docs/plans/2026-09-29-0837-feat-production-opsec-radio-contract-plan.md (R5, KTD1). The sequence-ID dedup section is unaffected.
+
 ## Problem
 
 When developing and running multiple IEEE 802.15.4 radio dongles (LilyGO T-Dongle-C5) attached to a single host machine or operating within close RF proximity on Channel 15 (2.425 GHz), broadcast frames transmitted by the primary dongle are physically received over the airwaves by the second dongle. 
@@ -41,9 +43,9 @@ The companion daemon (`gibberish-daemon`) reassembles the incoming radio frame f
 ## What Didn't Work
 
 - **Relying Exclusively on Firmware-Level MAC Self-Discard**:
-  The ESP32-C5 firmware already discards frames where the IEEE 802.15.4 MAC Header (MHR) Source Short Address matches its own local MAC address (`raw.data[8..12] == self.local_mac[4..8]`). However, this only suppresses self-reception on the *transmitting* dongle. Dongle 2 has a distinct hardware MAC address and legitimately receives Dongle 1's RF airwave broadcast. Firmware-level loopback filtering cannot detect that Dongle 1 and Dongle 2 share the same host machine.
+  The ESP32-C5 firmware already discards frames whose 4-byte MAC tail in the MAC header (a non-standard field; the frame control field declares no source address, `apps/gibberish-firmware/src/radio/ieee802154.rs:104-117`) matches its own local MAC (`raw.data[8..12] == self.local_mac[4..8]`, `ieee802154.rs:131-134`). However, this only suppresses self-reception on the *transmitting* dongle. Dongle 2 has a distinct hardware MAC address and legitimately receives Dongle 1's RF airwave broadcast. Firmware-level loopback filtering cannot detect that Dongle 1 and Dongle 2 share the same host machine.
 - **Second-Resolution Timestamp Message IDs**:
-  Generating message IDs as `format!("m-{}", ts)` and `format!("rx-{}", now)` using `now.as_secs()` caused ID collisions whenever two events transpired in the same Unix second. In `controller.rs:248-260`, the deduplication logic checks `if m.id == msg.id { exists = true; }`, dropping any message sharing the second-level timestamp.
+  Generating message IDs as `format!("m-{}", ts)` and `format!("rx-{}", now)` using `now.as_secs()` caused ID collisions whenever two events transpired in the same Unix second. In `apps/gibberish-client/src/controller.rs` (around lines 246-260), the deduplication logic checks `if m.id == msg.id { exists = true; }`, dropping any message sharing the second-level timestamp.
 - **Silencing Swarm Broadcasts in the Client**:
   Suppressing all incoming messages on `#all` where `sender_node_id != 0` would prevent receiving legitimate broadcast messages from other physical peers in the mesh.
 
@@ -57,7 +59,7 @@ In [`apps/gibberish-daemon/src/main.rs`](file:///home/tscott/Work/esp32/gibberis
 
 ```rust
 let mut local_dongle_ids = std::collections::HashSet::new();
-if local_node_id != 0 {
+if user_specified_node_id && local_node_id != 0 {
     local_dongle_ids.insert(local_node_id);
 }
 
@@ -71,7 +73,7 @@ if let Some(detected_id) = parse_dongle_node_id(&line) {
 }
 ```
 
-When an incoming mesh message is reassembled by any dongle's transport, the daemon checks if the source node ID belongs to any attached local dongle:
+The `user_specified_node_id` guard matters: fb7f290 added it because seeding the set with the default fallback ID dropped real peer traffic (see the dual-dongle routing doc below). When an incoming mesh message is reassembled by any dongle's transport, the daemon checks if the source node ID belongs to any attached local dongle:
 
 ```rust
 // Suppress over-the-air loopback echoes from local dongles attached to this host
@@ -117,8 +119,8 @@ To resolve underlying half-duplex RF collisions between background telemetry bea
 ## Why This Works
 
 1. **Host-Wide Identity Awareness**: By aggregating all connected dongle IDs into `local_dongle_ids`, the daemon recognizes loopbacks regardless of which specific dongle transmitted and which overheard the frame on the RF channel.
-2. **Deterministic UI Ingestion**: Monotonic sequence counters guarantee that messages created within the same second generate unique keys (`m-{ts}-{seq}`), preserving rapid back-to-back chat messages while still deduplicating true transport retransmissions.
-3. **Zero Wire Overhead**: Loopback suppression requires no protocol alterations, extra packet headers, or cryptographic renegotiations; it is evaluated host-side from the physical 802.15.4 MAC address bytes.
+2. **Deterministic UI Ingestion**: Monotonic sequence counters guarantee that messages created within the same second generate unique keys (`m-{ts}-{seq}`), preserving rapid back-to-back chat messages from different events while still deduplicating true transport retransmissions. Caveat: the client also drops any outgoing message whose text is identical to an existing outgoing message (`m.is_outgoing && msg.is_outgoing && m.text == msg.text`, `apps/gibberish-client/src/controller.rs:246,256`), so repeated identical sends still collapse.
+3. **Zero Wire Overhead**: Loopback suppression requires no protocol alterations, extra packet headers, or cryptographic renegotiations; it is evaluated host-side from the MAC-derived source node ID carried in the frame's MAC header (superseded: production frames may carry no MAC bytes, OPSEC plan R5/KTD1).
 
 ## Prevention
 
@@ -133,4 +135,5 @@ To resolve underlying half-duplex RF collisions between background telemetry bea
 
 - [Issue #24: feat(radio): Out-of-band / dedicated telemetry channel and transmission preemption](https://github.com/derpy4me/gibberish/issues/24)
 - [Issue #15: feat(chat): #all Swarm broadcast channel and pairwise ratcheted 1-to-1 DMs](https://github.com/derpy4me/gibberish/issues/15)
+- [Solution: ESP32-C5 802.15.4 Dual-Dongle Mesh Routing and Echo Suppression](file:///home/tscott/Work/esp32/gibberish/docs/solutions/integration-issues/esp32c5-802154-dual-dongle-mesh-routing-and-echo-suppression.md)
 - [Solution: ESP32-C5 802.15.4 Promiscuous Self-Reception Loopback Suppression and Hardware Station Identity](file:///home/tscott/Work/esp32/gibberish/docs/solutions/integration-issues/esp32c5-802154-promiscuous-self-reception-and-station-identity.md)

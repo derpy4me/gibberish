@@ -43,10 +43,10 @@ Bootstrapping bare-metal Rust (`esp-hal` 1.2.1) on the LilyGO T-Dongle-C5 (ESP32
 - After flashing via `esptool write-flash` with RTS hard reset, the device's internal USB PHY does not re-enumerate until a power cycle or reset button toggle.
 
 ## What Didn't Work
-- Relying on the global user `~/.cargo/config.toml` which set `target-dir = "/tmp/.cargo/target"`. Because `/tmp` is a `tmpfs` RAM disk (32GB) already holding 24GB of accumulated cargo targets, compiling heavy proc-macro crates (`darling_core`, `syn`, `serde_derive`) exceeded the tmpfs quota.
+- Relying on the global user `~/.cargo/config.toml` which set `target-dir = "/tmp/.cargo/target"`. Because `/tmp` is a `tmpfs` RAM disk (32GB) already holding about 24GB of accumulated cargo targets at the time (a point-in-time observation, unverified now), compiling heavy proc-macro crates (`darling_core`, `syn`, `serde_derive`) exceeded the tmpfs quota.
 - Flashing bare `esp-hal` without an app descriptor. While previous chips/toolchains allowed raw ELF flashing, `espflash 4.5.0` requires an ESP-IDF compatible app descriptor structure for ESP32-C5 applications.
 - Adding `features = ["esp32c5", "jtag-serial"]` to `esp-println` without `default-features = false`. The default feature set includes `auto` (or `uart`), causing a mutual exclusion panic during `build.rs`.
-- Attempting to reset the ESP32-C5 USB-Serial-JTAG via software DTR/RTS ioctl calls (`fcntl.ioctl(fd, TIOCMBIC, TIOCM_DTR_str)`), which throws `OSError: [Errno 71] Protocol error` because the internal USB PHY endpoint stalls when held in bootloader reset mode.
+- Attempting to reset the ESP32-C5 USB-Serial-JTAG via software DTR/RTS ioctl calls (`fcntl.ioctl(fd, TIOCMBIC, TIOCM_DTR_str)`), which reportedly throws `OSError: [Errno 71] Protocol error` (unverified, no log kept) because the internal USB PHY endpoint stalls when held in bootloader reset mode.
 
 ## Solution
 
@@ -76,7 +76,7 @@ esp-println = { version = "0.18.0", default-features = false, features = ["esp32
 esp-bootloader-esp-idf = { version = "0.6.0", features = ["esp32c5"] }
 ```
 
-In `src/main.rs`, declare the app descriptor macro and use `OutputConfig` for GPIO:
+In `src/main.rs`, declare the app descriptor macro and use `OutputConfig` for GPIO (this snippet is the `c5-verify` scaffold at `/home/tscott/Work/esp32/c5-verify/src/main.rs`, trimmed; `apps/gibberish-firmware/src/main.rs` is the full firmware):
 
 ```rust
 #![no_std]
@@ -115,12 +115,12 @@ To safely preserve and restore the stock LilyGO factory demo on the 16 MB flash:
 
 **Backup:**
 ```bash
-esptool --port /dev/ttyACM1 --baud 921600 read-flash 0 0x1000000 firmware_backups/t-dongle-c5-factory-16mb.bin
+esptool --port /dev/ttyACM1 --baud 921600 read-flash 0 0x1000000 /home/tscott/Work/esp32/firmware_backups/t-dongle-c5-factory-16mb.bin
 ```
 
 **Restore:**
 ```bash
-esptool --port /dev/ttyACM1 --baud 921600 write-flash 0x0 firmware_backups/t-dongle-c5-factory-16mb.bin
+esptool --port /dev/ttyACM1 --baud 921600 write-flash 0x0 /home/tscott/Work/esp32/firmware_backups/t-dongle-c5-factory-16mb.bin
 ```
 
 After flashing or restoring over native USB CDC, power-cycle the dongle (unplug and replug) or press the reset button to re-initialize the on-chip USB PHY.

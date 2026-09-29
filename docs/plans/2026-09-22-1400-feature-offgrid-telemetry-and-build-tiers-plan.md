@@ -9,6 +9,22 @@ product_contract_source: ce-plan-bootstrap
 execution: code
 ---
 
+## Audit corrections (2026-09-29)
+
+> This plan is a historical record. An audit on 2026-09-29 checked its claims against the code. Implementation status: built in 6072f60, then reworked (ed843de, adf775e split-cadence telemetry; 79b3f73 opt-in debug telemetry, `prod` feature removed); its security claims are false, per the audit.
+
+- **Superseded:** this plan's production-RF-telemetry requirements (beacons, telemetry cadence, node-ID/MAC handling, "stealth"/"zero-leakage" prod RF) are superseded by the OPSEC plan (its R27) — see docs/plans/2026-09-29-0837-feat-production-opsec-radio-contract-plan.md (R1-R5, R22, R27).
+- **Superseded:** R3 two mutually exclusive features (`debug-telemetry` default + `prod`) — see docs/plans/2026-09-29-0837-feat-production-opsec-radio-contract-plan.md (R3, R22). `79b3f73` made `default = []` with only `debug-telemetry`; no `prod` feature exists.
+- **Superseded:** R4/R5 telemetry every 5 s (debug) / 60 s (prod) — see docs/plans/2026-09-29-0837-feat-production-opsec-radio-contract-plan.md (R2, R22). Both builds now run Trickle 10-60 s plus a 180 s static beacon (`firmware/src/main.rs:172-181,212-215,440-448`); no 5 s code exists.
+- **Claimed:** prod telemetry "encrypted with the swarm ratchet key"; 80-byte `ClosedTelemetry` under ChaCha20-Poly1305 (R5, Schema) **Actually:** the firmware holds no keys; prod telemetry was plaintext (`postcard::to_slice` at 6072f60, plaintext `CompactDeltaPayload` now). `ClosedTelemetry` is USB-only now.
+- **Claimed:** prod is "zero metadata leakage", "stealth", "RF sniffer sees only high-entropy ciphertext", "indistinguishable from random noise" (Goal, A3, AE2) **Actually:** plaintext beacons carry the raw MAC tail (`main.rs:63-66`), the network tag is a constant ASCII `"GIBBERIS"` (`frame.rs:50`), and every MHR carries the MAC tail (`ieee802154.rs:113-116`).
+- **Claimed:** Build tier `0xDB` Debug, `0xPR` Prod **Actually:** `0xPR` is not valid hex; the code has `Prod = 0x50` (`frame.rs:351`).
+- **Claimed:** Dashboard "Storage Mode (FAT32 Active / RAM Only)" **Actually:** no FAT32 exists (see the mesh plan); the label is cosmetic (`ui/display.rs:358`).
+- **Claimed:** sink parses `[Radio RX]` / `[Telemetry RX]` lines from the dongle (F2) **Actually:** those lines come from `log_info!`, which is compiled out unless `debug-telemetry` is on (`main.rs:18-33`); a default dongle gives the sink nothing.
+- **Claimed:** U5 "automated test running against physical hardware ... asserts Dongle A receives B's telemetry" **Actually:** `bin/fleet_sink_test.rs` mostly parses hard-coded strings and probes ports; the over-the-air assertion is not automated.
+- **Claimed:** Definition of Done "Zero-Trust Sealed: payload encryption verified intact across all tiers" **Actually:** the swarm key is the constant `Secret::new([0x55u8; 32])` (`apps/gibberish-daemon/src/main.rs:130`) and nonces repeat after 65,536 messages per sender (`chunk.rs:163-177`).
+- **Unverified:** Definition of Done "Hardware Grounded: live dashboard verified on ttyACM0/1". No log or screenshot exists.
+
 ## Goal Capsule
 
 - **Objective:** Build an autonomous, pure off-grid IEEE 802.15.4 RF telemetry sink and tiered build profiles (`debug` vs `prod`) for Project Gibberish. A central development machine with a plugged-in C5 dongle overhears in-band telemetry beacons broadcast by all peer dongles (Linux, macOS, Windows, Android) over 2.4 GHz airwaves, visualizing a real-time fleet health dashboard without touching Wi-Fi, routers, or IP networks.

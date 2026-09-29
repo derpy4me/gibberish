@@ -29,17 +29,17 @@ In the Slint mesh desktop client (`apps/gibberish-client`), users were completel
 ## Symptoms
 - Clicking inside the message input box produced no visual feedback, no cursor caret, and accepted no keyboard keystrokes.
 - The send button on the right was visible, but the input area appeared inert.
-- When replacing `TextInput` with `std-widgets` `LineEdit`, the widget rendered with a hardcoded light-gray background (`#c0c0c0`) that severely clashed with the dark Tactical Obsidian theme.
+- When replacing `TextInput` with `std-widgets` `LineEdit`, the widget reportedly rendered with a hardcoded light-gray background (`#c0c0c0`, unverified; no screenshot is committed) that clashed with the dark Tactical Obsidian theme.
 - When typing long messages past the visual boundaries of a raw `TextInput`, newly entered characters overflowed invisibly outside the clipped container without auto-scrolling to follow the caret.
 
 ## What Didn't Work
 1. **Binding `text: ""` directly**: An initial hypothesis suspected that `text: ""` declared inside a component instance created a continuous reactive binding that fought user input. While property bindings in Slint are reactive, literal string initializers do not continuously clear text.
-2. **Replacing with `LineEdit` from `std-widgets.slint`**: While `LineEdit` automatically handled focus and click-to-caret positioning, it could not be themed cleanly in standard Slint 1.9 without a full native styling overhaul, leaving an obtrusive light-gray box in the dark interface. Furthermore, `forward-focus: chat_view` at `MainWindow` level failed compilation because composite components inheriting `Rectangle` are not recognized as focusable primitives by Slint's build macro.
+2. **Replacing with `LineEdit` from `std-widgets.slint`**: While `LineEdit` automatically handled focus and click-to-caret positioning, it could not be themed cleanly in Slint without a full native styling overhaul (the client requests Slint `"1.9"` in `Cargo.toml`; `Cargo.lock` resolves 1.18.1), leaving an obtrusive light-gray box in the dark interface. Furthermore, `forward-focus: chat_view` at `MainWindow` level reportedly failed compilation because composite components inheriting `Rectangle` are not recognized as focusable primitives (unverified; 1e56343 only renamed the instance to `chat_view := ChatView` and no failing attempt is in git history).
 3. **Leaving `alignment: space-between` on the container `HorizontalLayout`**: Even with `horizontal-stretch: 1`, Slint's `HorizontalLayout` disables automatic stretching when `alignment: space-between` is present, shrinking elements without fixed widths to their intrinsic size.
 
 ## Solution
-1. **Removed `alignment: space-between`**: Removed the `space-between` alignment on the input's `HorizontalLayout` in [`apps/gibberish-client/ui/chat_view.slint`](file:///home/tscott/Work/esp32/gibberish/apps/gibberish-client/ui/chat_view.slint#L189), restoring `horizontal-stretch: 1` behavior so the input field expands to fill all available horizontal space up to the Send button.
-2. **Built Themed `HackerInput` Architecture**: Wrapped `TextInput` in an outer `Rectangle` with `clip: true` and explicit dimensions (`width: 100%; height: 100%`), ensuring the click target matches the entire visual bounding box.
+1. **Removed `alignment: space-between`**: Removed the `space-between` alignment on the input's `HorizontalLayout` in [`apps/gibberish-client/ui/chat_view.slint`](file:///home/tscott/Work/esp32/gibberish/apps/gibberish-client/ui/chat_view.slint#L266), restoring `horizontal-stretch: 1` behavior so the input field expands to fill all available horizontal space up to the Send button.
+2. **Wrapper Rectangle around the input** (commit a34aacf's message calls this `HackerInput`, but no component of that name exists in the code): Wrapped `TextInput` in an outer `Rectangle` with `clip: true` and explicit dimensions (`width: 100%; height: 100%`), ensuring the click target matches the entire visual bounding box.
 3. **Implemented Slint Caret Auto-Scroll**: Bound `x` to `computed-x` and attached a `cursor-position-changed(pos)` handler that slides the text horizontally to keep the caret visible as long messages are typed:
 
 ```slint
@@ -107,5 +107,5 @@ Rectangle {
 
 ## Related Issues
 - Commit [`f0ddbf2`](https://github.com/derpy4me/gibberish/commit/f0ddbf2) (Introduced `space-between` layout collapse)
-- Commit [`1e56343`](https://github.com/derpy4me/gibberish/commit/1e56343) (Switched to LineEdit and identified styling/forward-focus limitations)
-- Commit [`a34aacf`](https://github.com/derpy4me/gibberish/commit/a34aacf) (Final verified fix with HackerInput and auto-scroll caret tracking)
+- Commit [`1e56343`](https://github.com/derpy4me/gibberish/commit/1e56343) (Switched to LineEdit widget with forward-focus; the commit body is empty, so the styling/forward-focus limitations above are not documented in git)
+- Commit [`a34aacf`](https://github.com/derpy4me/gibberish/commit/a34aacf) (Removed `alignment: space-between`, wrapper Rectangle, and auto-scroll caret tracking; the commit message calls the wrapper "HackerInput")

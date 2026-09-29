@@ -180,7 +180,7 @@ sequenceDiagram
 ## 6. Cryptographic, Signal Security & Entropy Verification Suite
 
 ### Objective
-Empirically test, verify, and mathematically validate Gibberish's core security assertions:
+Empirically test, verify, and mathematically validate Gibberish's core security goals (several are currently unmet: frames carry a constant ASCII network tag and a MAC-derived source address in cleartext, so the entropy and "no MAC identifiers" tests below would fail today):
 1. *Airwave Indistinguishability*: Traffic appears as high-entropy random noise.
 2. *Zero-Knowledge Blind Relays*: Hardware dongles and repeaters cannot leak or extract plaintext.
 3. *Cryptographic Correctness*: No nonce reuse, robust replay rejection, and key isolation.
@@ -200,7 +200,7 @@ Empirically test, verify, and mathematically validate Gibberish's core security 
 ## 7. Dedicated Telemetry Channel & Transmission Preemption
 
 ### Problem Statement
-In half-duplex single-transceiver mesh networks (ESP32-C5 802.15.4 radio), automated periodic telemetry beacons currently share the primary communication channel (Channel 15, 2.425 GHz). When running aggressive telemetry cadences (e.g. 5-second debug intervals), telemetry broadcasts can collide with user chat messages or clipboard burst transmissions, leading to half-duplex frame drops and airtime contention.
+In half-duplex single-transceiver mesh networks (ESP32-C5 802.15.4 radio), automated periodic telemetry beacons currently share the primary communication channel (Channel 15, 2.425 GHz). When running aggressive telemetry cadences (e.g. 5-second debug intervals, a cadence that does not exist in the current code; the shortest is the 10 s Trickle minimum), telemetry broadcasts can collide with user chat messages or clipboard burst transmissions, leading to half-duplex frame drops and airtime contention. (Update: two-tier priority queuing, where chat preempts telemetry backoff, has since been implemented in commit `adf775e`.)
 
 ### Proposed Solutions
 1. **Airtime Segregation & Preemption**:
@@ -221,4 +221,4 @@ In half-duplex single-transceiver mesh networks (ESP32-C5 802.15.4 radio), autom
 - [ ] Design the `PhysicalTransport` trait in `crates/gibberish-protocol` to prepare for generic Zigbee / desktop-native hardware.
 - [ ] Benchmark ESP32-C5 USB Composite (CDC-ACM + MSC) in bare-metal Rust.
 - [ ] Build entropy analysis script (`tools/entropy-test`) running `ent` and NIST tests on serialized wire frames.
-- [ ] Implement active-transmission telemetry suppression & backoff ([Issue #24](https://github.com/derpy4me/gibberish/issues/24)).
+- [ ] Implement active-transmission telemetry suppression & backoff ([Issue #24](https://github.com/derpy4me/gibberish/issues/24)). (Partly done: two-tier priority queuing with low-priority backoff exists in `ieee802154.rs`; the production OPSEC plan removes production telemetry entirely.)

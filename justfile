@@ -31,13 +31,13 @@ logs log="/tmp/gibberish/daemon.log":
 flash port="":
     cd apps/gibberish-firmware && cargo build --release && espflash flash {{ if port != "" { "--port " + port } else { "" } }} target/riscv32imac-unknown-none-elf/release/gibberish-firmware
 
-# Build firmware with debug telemetry profile (5s unencrypted beacon)
+# Build firmware with serial debug output enabled (debug-telemetry feature; on-air beacon/telemetry cadence is the same as production)
 build-debug:
     cd apps/gibberish-firmware && cargo build --release --features debug-telemetry
 
 build-firmware-debug: build-debug
 
-# Build firmware with production profile (60s stealth beacon)
+# Build production firmware (currently still broadcasts beacons and telemetry)
 build-prod:
     cd apps/gibberish-firmware && cargo build --release
 
@@ -55,11 +55,11 @@ flash-prod port="":
 
 flash-firmware-prod port="": (flash-prod port)
 
-# Run central companion fleet sink
+# Run central companion fleet sink (receives telemetry only from debug-telemetry firmware)
 sink:
     cargo run --release -p gibberish-daemon --bin gibberish-sink
 
-# Run multi-node end-to-end telemetry verification
+# Run telemetry framing/parser checks; probes /dev/ttyACM0 and /dev/ttyACM1 if attached
 test-fleet:
     cargo run --release -p gibberish-daemon --bin fleet_sink_test
 
@@ -67,15 +67,15 @@ test-fleet:
 test-host:
     cargo test --workspace
 
-# Run multi-node mesh swarm simulation
+# Run single-process crypto/chunk/storage round-trip simulation (no radio or mesh simulation)
 test-sim:
     cargo run -p integration-sim
 
-# Run physical over-the-air RF mesh verification between attached dongles
+# Run over-the-air RF mesh test; requires two dongles on /dev/ttyACM0 and /dev/ttyACM1 with hard-coded node IDs
 ota-mesh:
     cargo run --release -p gibberish-daemon --bin ota_mesh_test
 
-# Check security guardrails (deny crypto in firmware)
+# Run cargo-deny policy check at the root workspace (does not inspect firmware, which is excluded from it; not verified to pass)
 check-deny:
     cargo deny check
 

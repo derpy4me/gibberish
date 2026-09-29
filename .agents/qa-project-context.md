@@ -8,31 +8,32 @@
   - Local IPC: ws://127.0.0.1:4483 (WebSocket JSON-RPC 2.0)
   - Hardware Serial Port: /dev/ttyACM0 (USB CDC-ACM at 115200 baud)
 - **Key User Flows:**
-  - Station Discovery & Beacon Broadcast: Node broadcasts unencrypted station beacon over airwaves; peers receive, parse node ID/alias/pubkey, and update contacts store.
-  - SAS 4-Word / QR Identity Verification: User selects contact, reviews derived BIP-39 4-word Short Authentication String and visual QR code, and toggles trust state to Verified.
-  - Swarm Broadcast Messaging: User sends broadcast message to `#all`; daemon encapsulates with `FLAG_GROUP` (no ACKs) and broadcasts over airwaves while persisting to local store.
-  - Pairwise Ratcheted Direct Messaging: User sends private 1-to-1 DM; daemon derives pairwise X25519 ratchet secret, encrypts with ChaCha20-Poly1305 (`FLAG_DIRECT`), persists to outbox as queued, and waits for SACK receipt.
-  - DTN Asymmetric Outbox & Beacon Flush: When recipient is unreachable, message is held in DTN outbox; upon recipient's periodic beacon arrival, daemon opportunistically flushes pending outbox messages.
-  - Outbox TTL Eviction: Messages pending beyond 48-hour TTL are automatically evicted on next check, updating outbox status to failed and message status to failed.
-  - Daemon Crash Recovery: On startup after abnormal termination, dangling outbox items in sending state are safely reset to pending without message loss or duplicate lockup.
-  - Slint UI Event Streaming: Slint native GUI client establishes WebSocket connection to daemon, submits JSON-RPC calls, and receives push notifications (`rx_message`, `node_discovered`, `delivery_ack`) via coalesced Tokio async queue.
+  - Station Discovery & Beacon Broadcast: Node broadcasts an unencrypted static metadata beacon over airwaves; peers parse the node ID and update the contacts store. The beacon carries no alias or public key: the daemon invents an alias (`Station-XXXX`) and stores an all-zero pubkey. The production OPSEC plan removes beacons.
+  - SAS 4-Word / QR Identity Verification: User selects contact, reviews derived BIP-39 4-word Short Authentication String and visual QR code, and toggles trust state to Verified. Caveat: the UI flow exists, but keys are hardcoded or placeholders (no key exchange), so the words do not prove contact authenticity.
+  - Swarm Broadcast Messaging: User sends broadcast message to `#all`; daemon encapsulates with `FLAG_GROUP` and broadcasts over airwaves while persisting to local store. Encrypted with the hardcoded swarm key; multi-chunk broadcasts still produce chunk-level NACK bitmask (SACK) frames, so "no ACKs" is not strictly true.
+  - Direct Messaging: User sends a 1-to-1 DM; daemon encrypts with ChaCha20-Poly1305 (`FLAG_DIRECT`) using the swarm-key sender subkey (so any swarm member can decrypt it), inserts a pending outbox row, and transmits immediately over RF. Pairwise X25519 ratchet code exists only in `apps/gibberish-client/src/chat.rs` and is called only from tests. Nothing marks the message delivered.
+  - DTN Asymmetric Outbox & Beacon Flush (not wired): Library-only logic in `dtn_outbox.rs`, exercised by `apps/gibberish-daemon/tests/dtn_test.rs`; no runtime caller flushes the outbox on a recipient beacon.
+  - Outbox TTL Eviction (not wired): The 48-hour TTL logic and constant exist and are tested, but nothing calls eviction at runtime, so nothing is ever evicted.
+  - Daemon Crash Recovery: On startup after abnormal termination, dangling outbox items in sending state are safely reset to pending without message loss or duplicate lockup. (Store logic and test exist; at runtime nothing currently sets the `sending` state.)
+  - Slint UI Event Streaming: Slint native GUI client establishes WebSocket connection to daemon, submits JSON-RPC calls, and receives push notifications (`rx_message`, `node_discovered`; `delivery_ack` has a client handler but the daemon never emits it) via coalesced Tokio async queue.
 
 ## Tech Stack
 ### Frontend (apps/gibberish-client)
 - **Framework:** Slint 1.18 (native UI toolkit)
 - **Language:** Rust 2021
 - **Styling:** Monospace terminal / cyberpunk dark palette
-- **Async Runtime:** Tokio 1.40 + bounded wake-coalescing event queue
+- **Async Runtime:** Tokio 1.x (declared minimum 1.40.0, locked 1.53.1) + bounded wake-coalescing event queue
 
 ### Backend Daemon (apps/gibberish-daemon)
-- **Framework:** Tokio 1.40 asynchronous runtime
+- **Framework:** Tokio 1.x asynchronous runtime (declared minimum 1.40.0, locked 1.53.1)
 - **Language:** Rust 2021
 - **IPC Protocol:** JSON-RPC 2.0 over WebSocket (tokio-tungstenite 0.24) on 127.0.0.1:4483
 - **Serial Transport:** serialport 4.5.1 for USB CDC-ACM framing
 
 ### Embedded Firmware (apps/gibberish-firmware)
 - **Platform:** ESP32-C5 (RISC-V `riscv32imac-unknown-none-elf`), `no_std`
-- **HAL:** esp-hal 0.23, esp-backtrace, esp-println
+- **HAL:** esp-hal 1.2.1, esp-radio 1.0.0-beta.1, esp-alloc, esp-bootloader-esp-idf, esp-backtrace, esp-println
+- **Workspace:** excluded from the root Cargo workspace; build and check from `apps/gibberish-firmware`
 - **Radio:** IEEE 802.15.4 2.4GHz raw transceiver framing
 
 ### Storage Layer (crates/gibberish-db)
@@ -41,8 +42,8 @@
 - **Migration Strategy:** Versioned schema migrations table (`_schema_migrations`)
 
 ### Core Libraries
-- **Cryptography (crates/gibberish-crypto):** chacha20poly1305 0.10, x25519-dalek 2.0, blake3 1.5, subtle 2.6
-- **Wire Protocol (crates/gibberish-protocol):** postcard 1.0, crc32fast 1.4, serde 1.0
+- **Cryptography (crates/gibberish-crypto):** chacha20poly1305 0.10, x25519-dalek 2.0, blake3 1.5, subtle 2.6 (declared but unused in code)
+- **Wire Protocol (crates/gibberish-protocol):** postcard 1.0, serde 1.0 (`crc32fast` 1.4 belongs to `crates/gibberish-storage`)
 
 ## Test Stack
 ### Unit / Integration
@@ -51,7 +52,7 @@
 - **Coverage Tool:** cargo-llvm-cov / cargo-tarpaulin
 
 ### Simulation Testing (tests/integration-sim)
-- **Framework:** Multi-node virtual mesh RF airwave simulation
+- **Framework:** Single-process crypto/chunk/SD-storage round-trip simulation between two logical nodes (no radio or mesh simulation)
 - **Config / Tests:** tests/integration-sim/src/
 
 ### Database Testing (crates/gibberish-db)
@@ -63,21 +64,19 @@
 - **Test Directory:** apps/gibberish-daemon/tests/
 
 ### Static Analysis & Lints
-- **Tools:** `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo deny check`
+- **Tools:** `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo deny check` (neither verified; `cargo deny check` runs at the root workspace, which excludes firmware, and `deny.toml` bans `x25519-dalek`, which `gibberish-crypto` depends on, so it likely fails)
 
 ## CI/CD
-- **Platform:** GitHub Actions / Local Justfile workflows
-- **Triggers:** Push to feature branches and pull requests to main
-- **Gate Checks:**
+- **Platform:** Local Justfile workflows only. There is no CI: no `.github/` directory or other CI config exists.
+- **Gate Checks (run manually):**
   - `cargo test --workspace` (all host unit and integration tests must pass)
   - `cargo clippy --workspace --all-targets --all-features -- -D warnings` (strict zero warnings)
-  - `cargo check -p gibberish-firmware --target riscv32imac-unknown-none-elf --release` (firmware cross-compile gate)
-- **Artifacts:** Firmware release binaries (.bin/.elf), host daemon and client binaries
+  - `cd apps/gibberish-firmware && cargo check --release` (firmware cross-compile gate; the firmware is excluded from the workspace, so `cargo check -p gibberish-firmware` from the root fails)
 
 ## Environments
 ### Local Host Development
 - **URL / Port:** ws://127.0.0.1:4483
-- **Characteristics:** In-memory or local temp SQLite DB (`/tmp/gibberish/store.db`), mock RF or loopback simulation
+- **Characteristics:** In-memory or local temp SQLite DB (`/tmp/gibberish/store.db`, the hard-coded path the daemon also uses in normal runs), mock RF or loopback simulation
 
 ### Hardware-in-the-Loop (HIL)
 - **Hardware:** LilyGO T-Dongle-C5 plugged into host via USB CDC-ACM (`/dev/ttyACM0`)
@@ -110,14 +109,14 @@
 
 ## Conventions
 ### Test Files
-- **Naming Pattern:** `*_test.rs` for integration test files, `mod tests` for unit tests inside `src/`
+- **Naming Pattern:** mostly `*_test.rs` / `*_tests.rs` for integration test files (some differ, e.g. `crypto_roundtrip.rs`), `mod tests` for unit tests inside `src/`
 - **Location:** `tests/` directory at crate/app root for integration tests, inline in `src/` for unit tests
 
 ### Data & Serialization
-- **Wire Serialization:** `postcard` binary serialization for IEEE 802.15.4 airwave payloads
+- **Wire Serialization:** hand-written big-endian byte layouts for IEEE 802.15.4 airwave headers and payloads; `postcard` is used only for `ClosedTelemetry` on USB CDC
 - **IPC Protocol:** JSON-RPC 2.0 specification over WebSocket
 - **Database Schema:** Explicit SQLite types, snake_case strings for persisted status enums
 
 ### Error Handling & Safety
-- **Error Types:** `thiserror` structured enums for library crates, explicit status codes for JSON-RPC
-- **Panics:** Zero panics in runtime paths; all database lock poisoning and connection errors recover or bubble up cleanly
+- **Error Types:** `thiserror` enums in `gibberish-db` and the client (`gibberish-crypto` and `gibberish-protocol` use plain enums), explicit status codes for JSON-RPC
+- **Panics:** Goal is zero panics in runtime paths; some `unwrap`/`expect` calls remain in non-test source (e.g. `ratchet.rs`, `identity.rs`, `ipc.rs`, firmware SPI init)

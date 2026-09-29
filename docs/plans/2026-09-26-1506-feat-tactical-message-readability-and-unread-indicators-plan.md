@@ -9,6 +9,17 @@ product_contract_source: ce-brainstorm
 execution: code
 ---
 
+## Audit corrections (2026-09-29)
+
+> This plan is a historical record. An audit on 2026-09-29 checked its claims against the code. Implementation status: built (6a7e5b4, refined by 2558ae9), per the audit.
+
+- **Claimed:** U4 tests `test_unread_counter_increments_for_inactive_conversation`, `..._suppression_for_active_conversation`, `..._clears_on_conversation_selection` **Actually:** one combined test `test_unread_counter_inactive_increment_and_active_suppression` (`apps/gibberish-client/tests/controller_test.rs:149`) covers all three behaviours.
+- **Claimed:** rule colour `#1c2636` and `border-radius` accent bars **Actually:** superseded by `2558ae9`: the rule colour is now `#27354a` and the radius was removed.
+- **Claimed:** status text `[*] QUEUED DTN` **Actually:** no such string exists; statuses are `*`, `[OK]`, `[Q]`, `[!]` (`ui/chat_view.slint:9`).
+- **Claimed:** "Foundational Client Shell (Completed): Pairwise ratcheted DMs ..." **Actually:** ratcheted DMs are not in the send path (see the Slint client plan corrections).
+- **Claimed:** "Slint 1.15.0+ (already in `Cargo.toml`)" **Actually:** `apps/gibberish-client/Cargo.toml` says `slint = "1.9"` (lockfile resolves 1.18.1).
+- **Unverified:** Definition of Done "memory under 15MB, startup <50ms"; no measurement exists.
+
 ## Goal Capsule
 
 - **Objective**: Humans communicating over the Gibberish mesh can easily distinguish incoming and outgoing airwave messages at a glance and track unread channel and station activity without clutter, cognitive strain, or modern bubble aesthetics.

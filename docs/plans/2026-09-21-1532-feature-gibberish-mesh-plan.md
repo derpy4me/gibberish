@@ -9,6 +9,30 @@ product_contract_source: ce-plan-bootstrap
 execution: code
 ---
 
+## Audit corrections (2026-09-29)
+
+> This plan is a historical record. An audit on 2026-09-29 checked its claims against the code. Implementation status: partly built (initial commit 6072f60, plus 3523751 and 5ad14c5); the Definition of Done below was never met, per the audit.
+
+- **Superseded:** "mathematically indistinguishable from random noise" (Summary, A3) — see docs/plans/2026-09-29-0837-feat-production-opsec-radio-contract-plan.md (R5, R6, R29). Actually only the payload is AEAD ciphertext; the 18-byte mesh header, flags, msg_id, a constant ASCII network tag and the MAC tail are cleartext (`crates/gibberish-protocol/src/frame.rs:50,60-77`, `apps/gibberish-firmware/src/radio/ieee802154.rs:113-116`).
+- **Claimed:** 64-bit BLAKE3-MAC admission tag gives "2^64 security margin against injection" (R15/Key Decision) **Actually:** the firmware accepts two hard-coded constant tags (`frame.rs:52-56`); the tag is identical on every frame, so one sniffed frame yields the credential.
+- **Claimed:** U2 test "host mock test verifying Bloom false-positive rates" **Actually:** no Bloom test exists anywhere; the firmware crate has no tests.
+- **Claimed:** TDM 200 ms cycle with a BLE slot (R1/KTD1) **Actually:** only scaffolding: the constants exist (`coex.rs:10-13`) but the BLE slot is an empty arm (`firmware/src/main.rs:563-565`) and `set_desktop_mode` is never called.
+- **Claimed:** BLE GATT peripheral with encrypted transport (R9) **Actually:** not built; firmware `Cargo.toml:13` enables only the `ieee802154` esp-radio feature.
+- **Claimed:** BLE PIN on LCD + button authorisation (R10, F2, AE4) **Actually:** not built end to end; `ble_gate.rs` is a state machine only, `request_pairing` has no callers, and the button handler is a no-op in `Idle`. U4 also says GPIO 9; the code uses GPIO 28 (`hal/mod.rs:20`).
+- **Claimed:** SD mounts "as a standard FAT32 volume" with `GIBBERISH/CHUNKS.BIN`, `VAULT/`, `DIAG.LOG`, PC-readable (R8, KTD2, U3) **Actually:** no filesystem code exists; the container writes raw sectors from LBA 10 and checkpoints at LBA 1/2 (`crates/gibberish-storage/src/fat32_container.rs`), which would corrupt a real FAT32 card. The file names appear only in comments.
+- **Claimed:** SD probe "CMD0/CMD8/ACMD41 with 300 ms timeout" (R7) **Actually:** the sequence is implemented (`sd_driver.rs:87-177`) but the code comment says a fast timeout under 50 ms (`:58`).
+- **Claimed:** LCD shows `SD: NONE (RAM ONLY)` and the dongle "boots in 120 ms" (AE2) **Actually:** the LCD string is `"Storage: RAM Only"` (`ui/display.rs:360`); boot time was never measured (unverified).
+- **Unverified:** R26 checkpoint recovery "<15 ms, scan at most 64 KB". Checkpoint LBAs 1/2 are right, but there is no timing test or 64 KB scan logic.
+- **Claimed:** `cargo-deny` rules forbid crypto keys in firmware (R33) **Actually:** `deny.toml` bans `x25519-dalek` workspace-wide with no wrappers while the host crate `gibberish-crypto` uses it (`crates/gibberish-crypto/Cargo.toml:12`); the firmware is excluded from the workspace. `cargo-deny` was not run.
+- **Claimed:** Double Ratchet pairwise + Sender Keys (R11/R12) **Actually:** `SenderKeyChain` is a hash chain with no DH ratchet (`ratchet.rs:110-140`), and the production send path uses a swarm-key sender subkey for everything, including DMs (`apps/gibberish-daemon/src/chunk.rs:116-166`).
+- **Claimed:** QR device enrolment and BIP-39 12-word backup (R5/R6) **Actually:** not built; `bip39` is used only for the 4-word SAS (`client/identity.rs`) and `App.tsx:134-138` is a static icon and label.
+- **Claimed:** clipboard "text and images up to 5 MB" (R17) **Actually:** text only (`clipboard.rs`, `Secret<String>`); `total_chunks` is a `u8` (`frame.rs:68`), so the real ceiling is about 255 x 80 B = 20 KB.
+- **Claimed:** hotkey `Ctrl+Alt+C` (R25) **Actually:** not built; no hotkey code in the daemon or client.
+- **Claimed:** layout lists `apps/gibberish-wasm`; tests run `cargo test -p gibberish-core` **Actually:** `apps/` has only client, daemon and firmware; there is no `gibberish-core` crate. The web/iOS stubs are about 350 lines total.
+- **Claimed:** Central Testing Telemetry Sink aggregating over "WebSocket / UDP" **Actually:** the sink reads serial ports only (`bin/gibberish_sink.rs:44-50`).
+- **Claimed:** AE1 "zero plaintext/metadata recoverable from SD" with "random nonces" **Actually:** nonces are derived, not random (`ratchet.rs:20-35`), and stored records include the full plaintext mesh header incl. msg_id.
+- **Claimed:** Definition of Done: Hardware Grounded, Zero-Trust Verified (RF sniffing capture), Cross-Platform Verified, Resilience Verified **Actually:** none met: no RF capture was ever taken, no mobile or browser client runs, and MicroSD gossip catch-up is not implemented. Treat these as future goals.
+
 ## Goal Capsule
 
 - **Objective:** Build "Gibberish" — a zero-trust, off-grid encrypted mesh communications, decentralized clipboard synchronization, and sneakernet system running on LilyGO T-Dongle-C5 hardware in bare-metal Rust (`no_std`), with seamless cross-platform client support across macOS, Windows, Linux, Android, and iOS.

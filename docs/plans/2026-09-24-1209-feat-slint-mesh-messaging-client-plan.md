@@ -10,6 +10,18 @@ product_contract_source: ce-brainstorm
 execution: code
 ---
 
+## Audit corrections (2026-09-29)
+
+> This plan is a historical record. An audit on 2026-09-29 checked its claims against the code. Implementation status: partly built (3f9641c, dc5a9db, d40f6f0, f0ddbf2, 22bb5ee); not built: `MeshTransport` trait, Android USB / BLE transports, real pairwise DMs in the send path, real SAS keys, runtime DTN wiring, mobile builds, per the audit.
+
+- **Claimed:** `MeshTransport` trait with `DesktopIpcTransport`, `AndroidUsbTransport`, `BleGattTransport`; R18 mobile in-process engine; "runs on Android and iOS" (KTD2) **Actually:** only `DesktopIpcTransport` exists (`apps/gibberish-client/src/transport.rs:40`); no mobile builds or other transports.
+- **Claimed:** Definition of Done "pairwise ratcheted 1-to-1 DMs function end-to-end" **Actually:** `encrypt_direct_message` (`client/src/chat.rs:92`) has no production call site; the daemon's `send_dm` encrypts under the swarm-key sender subkey (`chunk.rs:116-137,166`), so every swarm holder can read DMs. Box unticked.
+- **Claimed:** Definition of Done "4-word SAS and QR verification successfully prove identity out-of-band" **Actually:** the daemon stores contact `pubkey: [0u8; 32]` (`daemon/main.rs:331`), the client fabricates the peer key from the node ID (`controller.rs:517-523`) and the local keypair is the constant `[0x42; 32]` (`:535`), so the words are not tied to real keys. QR is rendered but there is no scanner. Box unticked.
+- **Claimed:** Definition of Done "Beacon-triggered DTN outbox ... flushes on overheard beacons, evicts at 48h" **Actually:** `DtnOutboxEngine` is used only by `tests/dtn_test.rs`; it is not referenced in the daemon's `main.rs` or `ipc.rs`, so nothing flushes or evicts at runtime, and production firmware emits no beacon to overhear (OPSEC plan R2, R19). Box unticked.
+- **Claimed:** R3 station list shows "battery/status indicators" **Actually:** not built; no battery field exists in the protocol, db or UI.
+- **Claimed:** KTD1 names a `TelemetryBar` component and U1 styling (`#0f172a`, 220px roster, 24px footer) **Actually:** `TelemetryBar.slint` does not exist and the UI was rewritten in `f0ddbf2`/`6a7e5b4`; `#0f172a` is no longer in the `.slint` files.
+- **Unverified:** "compiles and runs natively on ... macOS" (box left ticked; Linux is verified by `cargo test -p gibberish-client`, macOS only has `tools/mac-sync.sh` with no evidence of a run); "<15 MB RAM" and "window appears in <50 ms"; "Instant Cold Start" and "Cross-Platform Parity (cargo-apk, iOS)" (no apk/ios build config exists); GitHub issues #12-#17 (external).
+
 ## Goal Capsule
 
 - **Objective**: Humans can discover nearby stations, verify contact identities, exchange pairwise encrypted direct messages, and broadcast on a shared swarm channel over 802.15.4 mesh airwaves using a native desktop or mobile application.
@@ -442,7 +454,7 @@ cargo test -p gibberish-db
 - [x] Slint client compiles and runs natively on Linux (Wayland/X11) and macOS with bare hacker monospace layout.
 - [x] WebSocket JSON-RPC server on `127.0.0.1:4483` supports all client methods and real-time event streaming.
 - [x] Airwave contact discovery populates station roster with live RSSI and Amber/Green trust states.
-- [x] 4-word SAS mnemonic generation and QR verification successfully prove identity out-of-band.
-- [x] Swarm broadcast (`#all`) and pairwise ratcheted 1-to-1 DMs function end-to-end.
-- [x] Beacon-triggered DTN outbox reliably queues offline messages, flushes on overheard beacons, and evicts at 48h TTL.
+- [ ] 4-word SAS mnemonic generation and QR verification successfully prove identity out-of-band. (audit 2026-09-29: not met — see Audit corrections)
+- [ ] Swarm broadcast (`#all`) and pairwise ratcheted 1-to-1 DMs function end-to-end. (audit 2026-09-29: not met — see Audit corrections)
+- [ ] Beacon-triggered DTN outbox reliably queues offline messages, flushes on overheard beacons, and evicts at 48h TTL. (audit 2026-09-29: not met — see Audit corrections)
 - [ ] All GitHub issues ([#12](https://github.com/derpy4me/gibberish/issues/12), [#13](https://github.com/derpy4me/gibberish/issues/13), [#14](https://github.com/derpy4me/gibberish/issues/14), [#15](https://github.com/derpy4me/gibberish/issues/15), [#16](https://github.com/derpy4me/gibberish/issues/16), [#17](https://github.com/derpy4me/gibberish/issues/17)) under Milestone 10 updated with progress and closed upon landing.

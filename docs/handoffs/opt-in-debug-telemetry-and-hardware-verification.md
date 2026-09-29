@@ -12,6 +12,16 @@ branch: "feat/milestone-10-slint-mesh-messaging-client"
 head: "79b3f739141c3b69968ff4a78a5b9b5ef7003f60"
 ---
 
+## Audit corrections (2026-09-29)
+
+> This handoff is a historical record. An audit on 2026-09-29 checked its claims against the code. Implementation status: built (79b3f73 and 9a3a213); the frontmatter `head:` (79b3f73) is stale because section 6 describes 9a3a213, per the audit.
+
+- **Claimed:** "All 78 host unit and integration tests passing" **Actually:** the test count is 97 at `79b3f73` and 99 at HEAD `9a3a213` (99 passed, 0 failed in the audit run); no commit has 78.
+- **Claimed:** "observe 5-second debug beacons" (next steps) **Actually:** no 5 s cadence exists in the code; beacons follow Trickle 10-60 s plus a 180 s static beacon.
+- **Claimed:** root cause: daemon "derived HKDF sender subkeys using 0" **Actually:** the mechanism is right but the KDF is keyed BLAKE3, not HKDF (`crates/gibberish-crypto/src/ratchet.rs:47`).
+- **Claimed:** "Physical IEEE 802.15.4 bi-directional mesh communication is 100% verified on hardware" **Actually:** the evidence is one message each way between two dongles on one host. Multi-hop is broken by design (OPSEC handoff bug 2) and untested; production node-ID discovery is broken without `--node-id` (bug 3). See docs/plans/2026-09-29-0837-feat-production-opsec-radio-contract-plan.md (R7, R17, R18, R31).
+- **Unverified:** both release and debug ELFs "399 KB" (only one ELF exists on disk, 400,872 B; the quoted flash images differ); node MACs `38:44:be:bc:e5:b8` / `...bd:82:b4` on ttyACM0/1; `just ota-mesh` tests 1 and 2 "PASS" (no log saved).
+
 # Session Summary & Handoff
 
 ## 1. Objective & Current Intent

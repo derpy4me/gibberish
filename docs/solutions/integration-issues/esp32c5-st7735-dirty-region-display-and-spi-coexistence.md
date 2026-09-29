@@ -29,9 +29,9 @@ tags:
 On the LilyGO T-Dongle-C5 (ESP32-C5 RISC-V), the ST7735 0.96-inch color LCD (160×80 RGB565) and the onboard MicroSD card slot share the identical hardware `SPI2` peripheral (SCK: GPIO 6, MOSI: GPIO 2, MISO: GPIO 7, LCD_CS: GPIO 10, SD_CS: GPIO 23). Performing unbuffered full-screen repaints at a standard 4 Hz refresh rate streams 25,600 bytes of pixel data over SPI four times every second (102.4 KB/s), severely saturating the half-duplex SPI bus, introducing high bus contention, and stalling latency-sensitive radio packet ingestion. Furthermore, coupling bare-metal event loop telemetry timestamps to display refresh timers causes telemetry clocks to drift wildly.
 
 ## Symptoms
-- **SPI Bus Starvation**: MicroSD sector writes and radio packet handling experience latency spikes or buffer overflow drops when the display is constantly redrawing static status lines.
-- **4x Fast Clock Telemetry**: When `uptime_secs` was updated inside the 4 Hz LCD refresh block (`loop_tick % 50 == 0` at 5ms per tick), the device incremented `uptime_secs` every 250ms, causing peer devices to observe telemetry running 4x faster than real time.
-- **Cargo Linker Failure in Multi-Crate Workspace**: Compiling firmware from the repository root via `cargo build --manifest-path apps/gibberish-firmware/Cargo.toml --target riscv32imac-unknown-none-elf` fails with `rust-lld: error: undefined symbol: _rtc_fast_bss_end, DefaultHandler` because member-level `.cargo/config.toml` rustflags (`-C link-arg=-Tlinkall.x`) are not inherited when Cargo runs outside the member directory.
+- **SPI Bus Starvation** (unverified; no log shows the failing state): MicroSD sector writes and radio packet handling experience latency spikes or buffer overflow drops when the display is constantly redrawing static status lines.
+- **4x Fast Clock Telemetry**: When `uptime_secs` was updated inside the 4 Hz LCD refresh block (`loop_tick % 50 == 0` at 5ms per tick), the device incremented `uptime_secs` every 250ms, causing peer devices to observe telemetry running 4x faster than real time (unverified; no log or commit shows the failing state).
+- **Cargo Linker Failure in Multi-Crate Workspace**: Compiling firmware from the repository root via `cargo build --manifest-path apps/gibberish-firmware/Cargo.toml --target riscv32imac-unknown-none-elf` reportedly fails with `rust-lld: error: undefined symbol: _rtc_fast_bss_end, DefaultHandler` (unverified; no build log) because member-level `.cargo/config.toml` rustflags (`-C link-arg=-Tlinkall.x`) are not inherited when Cargo runs outside the member directory.
 
 ## What Didn't Work
 - **Naive Full-Screen Clearing (`clear_screen` + `render_status`)**: Repainting the full 160×80 grid every 250ms flooded SPI2 with 25.6 KB bursts. This caused visual tearing and choked concurrent SPI transactions with the MicroSD block device.
@@ -108,22 +108,31 @@ In [`apps/gibberish-firmware/src/main.rs`](file:///home/tscott/Work/esp32/gibber
 // 1. Monotonic 1-second system uptime clock (1000ms = 200 ticks of 5ms)
 if loop_tick % 200 == 0 {
     telemetry.uptime_secs = telemetry.uptime_secs.saturating_add(1);
+    // ... heartbeat log ...
 }
 
 // 2. 4 Hz Status Display Render (250ms = 50 ticks of 5ms)
 if loop_tick % 50 == 0 {
-    display.render_status(
+    // ... refresh telemetry fields ...
+    display.render_dashboard(
+        local_node_id,
+        15,
+        "2.425 GHz",
         storage.mode(),
         telemetry.rx_packet_count,
         telemetry.tx_packet_count,
         sram_ring.len(),
         sram_ring.dropped_count(),
-        local_node_id,
-        &peer_table,
+        peer_table.primary_peer(),
+        peer_table.secondary_peer(),
+        ble_pin,
+        btn_flash_ticks > 0,
         sync_phase,
     );
 }
 ```
+
+(Real code: `apps/gibberish-firmware/src/main.rs:648-650` and `681-713`. The original `render_status(...)` call was renamed to `render_dashboard`.)
 
 ### 3. Cargo Workspace Cwd Discipline
 When compiling bare-metal firmware crates, invoke `cargo` with the working directory set directly to the crate containing `.cargo/config.toml`:
@@ -134,8 +143,8 @@ cd apps/gibberish-firmware && cargo build --release
 Or ensure top-level `.cargo/config.toml` at workspace root provides identical `link-arg=-Tlinkall.x` target rustflags.
 
 ## Why This Works
-1. **Bandwidth Reduction**: Character-cell dirty caching reduces SPI bus traffic from 25.6 KB per frame down to ~150–300 bytes per frame during normal throughput counter increments, reducing SPI bus utilization by >95% and leaving the shared bus free for MicroSD block I/O.
-2. **Deterministic Timekeeping**: Decoupling the 1 Hz uptime clock from the 4 Hz rendering timer ensures telemetry payload values match true wall-clock time regardless of display rendering activity.
+1. **Bandwidth Reduction**: Character-cell dirty caching reduces SPI bus traffic from 25.6 KB per frame down to an estimated ~150–300 bytes per frame during normal throughput counter increments (an estimate, not measured), which would cut SPI bus utilization by well over 90% and leave the shared bus free for MicroSD block I/O.
+2. **Deterministic Timekeeping**: Decoupling the 1 Hz uptime clock from the 4 Hz rendering timer keeps uptime independent of display rendering activity. It is still not true wall-clock time: uptime counts loop iterations, each assumed to be 5 ms (`delay_millis(5)` plus processing, `apps/gibberish-firmware/src/main.rs:223-225`), so it runs slow; no hardware timer backs it.
 3. **Linker Discovery**: Running inside the crate directory allows Cargo to pick up `.cargo/config.toml` directives, linking `linkall.x` and resolving the hardware memory layout symbols required by `esp-hal`.
 
 ## Prevention & Best Practices

@@ -9,6 +9,21 @@ product_contract_source: ce-brainstorm
 execution: code
 ---
 
+## Audit corrections (2026-09-29)
+
+> This plan is a historical record. An audit on 2026-09-29 checked its claims against the code. Implementation status: built for the protocol framing, firmware queue/Trickle and daemon fleet state (ed843de, adf775e, ccfb924, f92d308, 8c2b36b, 9fb4829); the security contract ("zero-leakage") was NOT met, per the audit.
+
+- **Superseded:** this plan's production-RF-telemetry requirements (beacons, telemetry cadence, node-ID/MAC handling, "stealth"/"zero-leakage" prod RF) are superseded by the OPSEC plan (its R27) — see docs/plans/2026-09-29-0837-feat-production-opsec-radio-contract-plan.md (R1-R5, R22, R27).
+- **Claimed:** R7/Summary/AE3/DoD: over-the-air frames are "zero-leakage" in dev and prod, `node_id` is an 8-byte truncated BLAKE3 hash, raw MAC never broadcast **Actually:** the firmware sets `beacon.node_id = full_mac` (`firmware/src/main.rs:63-66`), MHR bytes 7-10 carry the MAC tail on every frame (`ieee802154.rs:113-116`), and no blake3 dependency exists in the firmware or protocol crates. The doc comment at `frame.rs:531` repeats the false claim.
+- **Claimed:** `test_qa_zero_mac_leakage_privacy_contract` proves zero MAC leakage **Actually:** the test (`daemon/tests/telemetry_qa_rigor_test.rs:468-540`) plants the MAC's low 4 bytes as `node_id` and in the MHR, then only asserts the 2-byte OUI `0x38 0x44` is absent; it never checks the tail.
+- **Claimed:** R15 telemetry "authenticated solely by the 64-bit Network Admission Tag" **Actually:** the tag is a public constant (`frame.rs:50-56`), so it authenticates nothing.
+- **Claimed:** KTD2 "zero-copy packed layouts without serde/postcard" **Actually:** the structs derive `Serialize, Deserialize` and are `repr(C)` (`frame.rs:527-528,623-624`) with hand-written `serialize`.
+- **Claimed:** U2 "unit tests in `ieee802154.rs` verifying priority preemption" **Actually:** the firmware crate has no tests; the only preemption test re-implements a model inside `daemon/tests/telemetry_qa_rigor_test.rs:399`, not the firmware code.
+- **Superseded:** R9 gating `#[cfg(not(feature = "prod"))]` and verification with `--features prod` — see docs/plans/2026-09-29-0837-feat-production-opsec-radio-contract-plan.md (R3, R22). The `prod` feature was removed in `79b3f73`.
+- **Claimed:** Success: "automated binary inspection verifies zero diagnostic strings in prod ELF" **Actually:** no automation exists; a manual `strings` check found 0 `#PKT#` in the current release ELF, which is one string checked once.
+- **Unverified:** AE4 "chat transmits <20 ms during telemetry scheduling" (modelled only, never timed on hardware). The 55 B / 59 B frame sizes and 4.256 ms airtime figures are frame-level arithmetic (`frame.rs:756-770`), not an RF capture.
+- **Note:** every Definition of Done box is unticked, but commit messages `f92d308` ("zero-leakage MAC") and `9fb4829` ("verify physical dual-dongle") claim completion.
+
 ## Goal Capsule
 
 - **Objective:** Eliminate redundant RF airtime consumption by >56% (cutting telemetry payload by 75% from 96B down to 24B) and establish an airtight dual-axis telemetry policy (Over-The-Air RF vs Over-The-Wire USB-CDC across Dev vs Prod profiles) for Project Gibberish.

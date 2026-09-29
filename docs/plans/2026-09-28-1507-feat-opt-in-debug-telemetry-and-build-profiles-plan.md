@@ -8,6 +8,15 @@ product_contract_source: ce-plan-bootstrap
 execution: code
 ---
 
+## Audit corrections (2026-09-29)
+
+> This plan is a historical record. An audit on 2026-09-29 checked its claims against the code. Implementation status: built (79b3f73); line numbers in this plan are now about 4 lines off after 9a3a213, per the audit.
+
+- **Superseded:** this plan's production-RF-telemetry requirements (beacons, telemetry cadence, node-ID/MAC handling, "stealth"/"zero-leakage" prod RF) are superseded by the OPSEC plan (its R27) — see docs/plans/2026-09-29-0837-feat-production-opsec-radio-contract-plan.md (R1-R5, R22, R27).
+- **Claimed:** Summary: default build is a "lean, zero-leakage production image (... 60s stealth Trickle beacon)" **Actually:** the default image still transmits plaintext static and delta beacons with the raw MAC tail (`firmware/src/main.rs:~327-430`), a button-triggered `[0xAA;96]` frame with the ASCII tag (`:232-255`), and the MAC in every MHR. Trickle is 10-60 s, static beacon 180 s.
+- **Claimed:** design table: debug = "5s rich beacon cadence", prod = "60s" **Actually:** the flag only gates logging, `#PKT#` vs binary CDC and the `build_tier` byte; both builds share one cadence and no 5 s constant exists. The same stale wording is in the `justfile:34,40` comments.
+- **Unverified:** verification step `cargo clippy ... -D warnings` on both feature sets, and Definition of Done "hardware flash tested"; no output or artifact is recorded.
+
 ## Goal Capsule
 
 - **Objective:** Eliminate the inverted `prod` feature flag anti-pattern, establish clean opt-in `--features debug-telemetry` conditional compilation across the firmware, and configure optimized release debug symbol profiles for ESP32-C5 embedded diagnosis without bloated dev profiles.
